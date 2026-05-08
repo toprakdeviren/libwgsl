@@ -1,0 +1,9 @@
+-xc
+-std=c11
+-Iinclude
+-Isrc
+-Ivendor/unicode/include
+-Wall
+-Wextra
+-Wno-unused-parameter
+-Wno-unused-function

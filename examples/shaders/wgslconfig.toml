@@ -1,0 +1,21 @@
+# wgslconfig.toml — preamble injection rules for the corpus.
+#
+# `00_shared.wgsl` carries types and helpers used by every kernel.
+# `00_infrastructure.wgsl` carries dispatch / barrier / reduction
+# scaffolding.  Both get prepended (in that order) to every other
+# `*.wgsl` in this directory before lex / parse / resolve.
+#
+# Read by libwgsl via `wgsl_project_open` (or
+# `wgsl_project_open_from_string` from the WASM-side embedder).
+# `wgsl_project_match` returns the file list for any kernel; it
+# silently excludes the preamble files from injecting into
+# themselves.
+
+[preamble]
+files = [
+    "00_shared.wgsl",
+    "00_infrastructure.wgsl",
+]
+auto_inject_into = [
+    "*.wgsl",
+]
