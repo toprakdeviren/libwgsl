@@ -54,6 +54,9 @@ typedef enum {
     /* Aggregates. */
     WGSL_TYPE_STRUCT,     /* ref = WGSLNode* (the DECL_STRUCT AST node)   */
 
+    /* Internal / Synthetic types. */
+    WGSL_TYPE_ATOMIC_CX_RESULT, /* ref = element type                     */
+
     WGSL_TYPE_KIND_COUNT,
 } WGSLTypeKind;
 
@@ -117,6 +120,7 @@ WGSLTypeInfo *wgsl_type_scalar(const WGSLTypeStore *s, WGSLTypeKind k);
 WGSLTypeInfo *wgsl_type_vec   (WGSLTypeStore *s, uint8_t width, WGSLTypeInfo *elem);
 WGSLTypeInfo *wgsl_type_mat   (WGSLTypeStore *s, uint8_t cols, uint8_t rows, WGSLTypeInfo *elem);
 WGSLTypeInfo *wgsl_type_atomic(WGSLTypeStore *s, WGSLTypeInfo *elem);
+WGSLTypeInfo *wgsl_type_atomic_cx_result(WGSLTypeStore *s, WGSLTypeInfo *elem);
 WGSLTypeInfo *wgsl_type_array (WGSLTypeStore *s, WGSLTypeInfo *elem, uint32_t length);
 
 /* — Predicates — */

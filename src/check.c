@@ -491,6 +491,7 @@ static WGSLTypeInfo *element_type_of(const WGSLTypeInfo *t) {
     if (wgsl_type_is_scalar(t)) return (WGSLTypeInfo *)(uintptr_t)t;
     if (t->kind == WGSL_TYPE_VEC ||
         t->kind == WGSL_TYPE_MAT ||
+        t->kind == WGSL_TYPE_ATOMIC ||
         t->kind == WGSL_TYPE_ARRAY)
     {
         return (WGSLTypeInfo *)t->ref;
@@ -669,6 +670,16 @@ static int type_member(WGSLTypeChecker *tc, WGSLNode *n) {
         return 0;
     }
 
+    /* Synthetic atomic CX result struct. */
+    if (ot->kind == WGSL_TYPE_ATOMIC_CX_RESULT) {
+        if (len == 9 && memcmp(name, "old_value", 9) == 0) {
+            return tc_set_type(tc, n, (WGSLTypeInfo *)ot->ref, obj_is_ref);
+        }
+        if (len == 9 && memcmp(name, "exchanged", 9) == 0) {
+            return tc_set_type(tc, n, tc->types->t_bool, obj_is_ref);
+        }
+    }
+
     /* Permissive fallback: types we don't model precisely yet (e.g.
      * the synthetic `__atomic_compare_exchange_result_T` struct that
      * `atomicCompareExchangeWeak` returns) reach this branch.  Rather
@@ -725,6 +736,7 @@ typedef enum {
     BR_TEMPLATE,            /* template arg of a templated callee       */
     BR_VEC4F,               /* vec4<f32> (texture sampling default)     */
     BR_VEC4U,               /* vec4<u32> (subgroupBallot)               */
+    BR_ATOMIC_CX_RESULT,    /* __atomic_compare_exchange_result<T>      */
 } WGSLBuiltinReturn;
 
 typedef struct {
@@ -857,7 +869,7 @@ static const WGSLBuiltinEntry kBuiltinTable[] = {
     { "atomicXor",                BR_ARG0_ELEM },
     { "atomicExchange",           BR_ARG0_ELEM },
     { "atomicStore",              BR_VOID      },
-    { "atomicCompareExchangeWeak",BR_ARG0_ELEM }, /* spec: __atomic_compare_exchange_result */
+    { "atomicCompareExchangeWeak",BR_ATOMIC_CX_RESULT }, /* spec: __atomic_compare_exchange_result */
 
     /* §17.9–10 Pack / unpack. */
     { "pack4x8snorm",             BR_U32       },
@@ -945,7 +957,12 @@ static int type_call_builtin(
 
     WGSLTypeInfo *arg0_type = NULL;
     if (call->child_count >= 2) {
-        arg0_type = wgsl_typecheck_type_of(tc, call->children[1]);
+        WGSLNode *arg0 = call->children[1];
+        if (arg0->kind == WGSL_NODE_EXPR_ADDR_OF && arg0->child_count >= 1) {
+            arg0_type = wgsl_typecheck_type_of(tc, arg0->children[0]);
+        } else {
+            arg0_type = wgsl_typecheck_type_of(tc, arg0);
+        }
     }
 
     switch (e->ret) {
@@ -977,6 +994,12 @@ static int type_call_builtin(
             if (t) return tc_set_type(tc, call, t, 0);
         }
         return tc_set_type(tc, call, fallback, 0);
+    }
+    case BR_ATOMIC_CX_RESULT: {
+        if (!arg0_type) return tc_set_type(tc, call, fallback, 0);
+        WGSLTypeInfo *elem = element_type_of(arg0_type);
+        if (!elem) elem = arg0_type;
+        return tc_set_type(tc, call, wgsl_type_atomic_cx_result(tc->types, elem), 0);
     }
     }
     return tc_set_type(tc, call, fallback, 0);

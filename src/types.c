@@ -141,6 +141,17 @@ WGSLTypeInfo *wgsl_type_atomic(WGSLTypeStore *s, WGSLTypeInfo *elem) {
     return t;
 }
 
+WGSLTypeInfo *wgsl_type_atomic_cx_result(WGSLTypeStore *s, WGSLTypeInfo *elem) {
+    if (!elem) return NULL;
+    WGSLTypeInfo *hit = store_find(s, WGSL_TYPE_ATOMIC_CX_RESULT, 0, 0, 0, elem);
+    if (hit) return hit;
+    WGSLTypeInfo *t = store_alloc(s);
+    if (!t) return NULL;
+    t->kind = (uint16_t)WGSL_TYPE_ATOMIC_CX_RESULT;
+    t->ref  = elem;
+    return t;
+}
+
 WGSLTypeInfo *wgsl_type_array(WGSLTypeStore *s, WGSLTypeInfo *elem, uint32_t length) {
     if (!elem) return NULL;
     WGSLTypeInfo *hit = store_find(s, WGSL_TYPE_ARRAY, 0, 0, length, elem);
@@ -315,6 +326,7 @@ const char *wgsl_type_kind_name(WGSLTypeKind k) {
     case WGSL_TYPE_ATOMIC:         return "atomic";
     case WGSL_TYPE_ARRAY:          return "array";
     case WGSL_TYPE_STRUCT:         return "struct";
+    case WGSL_TYPE_ATOMIC_CX_RESULT: return "__atomic_compare_exchange_result";
     case WGSL_TYPE_KIND_COUNT:     break;
     }
     return "<unknown>";
@@ -373,6 +385,11 @@ static void fmt_type(Fmt *f, const WGSLTypeInfo *t) {
             fmt_str(f, ", ");
             fmt_uint(f, t->array_len);
         }
+        fmt_str(f, ">");
+        break;
+    case WGSL_TYPE_ATOMIC_CX_RESULT:
+        fmt_str(f, "__atomic_compare_exchange_result<");
+        fmt_type(f, (const WGSLTypeInfo *)t->ref);
         fmt_str(f, ">");
         break;
     default:
