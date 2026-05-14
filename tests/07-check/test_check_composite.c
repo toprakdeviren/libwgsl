@@ -156,6 +156,42 @@ int main(void) {
         done(&p);
     }
 
+    /* ── Constructor partial-eval range checks ───────────────── */
+    {
+        P p; run(&p,
+            "fn f() {\n"
+            "  var v: i32;\n"
+            "  let x = vec2(68719476735, v);\n"
+            "}\n");
+        CHECK(!p.ok, "vec constructor const component overflow: must error");
+        CHECK(has_error_with(&p.diag, "out of range for i32"),
+              "vec constructor overflow diag");
+        done(&p);
+    }
+    {
+        P p; run(&p,
+            "fn f() {\n"
+            "  var v: u32;\n"
+            "  let x = array(v, -1);\n"
+            "}\n");
+        CHECK(!p.ok, "array constructor const component overflow: must error");
+        CHECK(has_error_with(&p.diag, "out of range for u32"),
+              "array constructor overflow diag");
+        done(&p);
+    }
+    {
+        P p; run(&p,
+            "struct S { x: u32, y: u32 }\n"
+            "fn f() {\n"
+            "  var v: u32;\n"
+            "  let x = S(v, -1);\n"
+            "}\n");
+        CHECK(!p.ok, "struct constructor const member overflow: must error");
+        CHECK(has_error_with(&p.diag, "out of range for u32"),
+              "struct constructor overflow diag");
+        done(&p);
+    }
+
     /* ── Vec swizzle ──────────────────────────────────────────── */
     {
         P p; run(&p,

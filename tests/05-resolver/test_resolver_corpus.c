@@ -2,7 +2,7 @@
  * Phase 5 Iter C — resolver across the real shader corpus.
  *
  * Mirrors the runtime engine's compilation workflow:
- *   1. `00_shared.wgsl` is the global preamble — prepended to every kernel
+ *   1. `_shared.wgsl` is the global preamble — prepended to every kernel
  *      compilation (defines `WG`, `NEG_INF`, `flat_id`, `is_finite`,
  *      `nan_guard`, `wg_reduce_sum`, `wg_reduce_max`, …).
  *   2. Each `.wgsl` file in `examples/shaders/` is split at
@@ -154,7 +154,7 @@ static void run_file(
 
     if (nm == 0) {
         /* No splits — file as a whole, with shared prepended.  Skip
-         * the prepend if `display == "00_shared.wgsl"` to avoid a
+         * the prepend if `display == "_shared.wgsl"` to avoid a
          * pointless self-concat. */
         char display_buf[256];
         snprintf(display_buf, sizeof display_buf, "%s", display);
@@ -207,16 +207,16 @@ int main(void) {
 
     /* Slurp the shared preamble. */
     size_t shared_len = 0;
-    char *shared = slurp(SHADERS_DIR "/00_shared.wgsl", &shared_len);
+    char *shared = slurp(SHADERS_DIR "/_shared.wgsl", &shared_len);
     if (!shared) {
-        fprintf(stderr, "FAIL  cannot read %s/00_shared.wgsl (run from wgsl/ root?)\n",
+        fprintf(stderr, "FAIL  cannot read %s/_shared.wgsl (run from wgsl/ root?)\n",
                 SHADERS_DIR);
         return 1;
     }
 
-    /* Resolve 00_shared.wgsl on its own first (it must be self-contained). */
+    /* Resolve _shared.wgsl on its own first (it must be self-contained). */
     FileStats shared_stats = {0};
-    run_file("00_shared.wgsl", "", 0, shared, shared_len, &shared_stats);
+    run_file("_shared.wgsl", "", 0, shared, shared_len, &shared_stats);
 
     /* Then iterate the rest, prepending shared. */
     DIR *d = opendir(SHADERS_DIR);
@@ -232,7 +232,7 @@ int main(void) {
     while ((e = readdir(d)) != NULL) {
         if (!has_suffix(e->d_name, ".wgsl")) continue;
         if (e->d_name[0] == '.') continue;
-        if (strcmp(e->d_name, "00_shared.wgsl") == 0) continue;
+        if (strcmp(e->d_name, "_shared.wgsl") == 0) continue;
         if (n_names >= 64) break;
         names[n_names++] = strdup(e->d_name);
     }
@@ -272,7 +272,7 @@ int main(void) {
     fprintf(stderr,
             "  %-32s %9s %5s\n", "shader", "sections", "ok");
     fprintf(stderr,
-            "  %-32s %9d %5d\n", "00_shared.wgsl",
+            "  %-32s %9d %5d\n", "_shared.wgsl",
             shared_stats.sections, shared_stats.sections_ok);
     for (int i = 0; i < nrows; i++) {
         fprintf(stderr,

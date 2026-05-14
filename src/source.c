@@ -43,6 +43,7 @@ static int line_break_at(const char *s, size_t i, size_t len, int *consumed) {
 
 int wgsl_source_init(WGSLSource *s, const char *bytes, size_t length) {
     memset(s, 0, sizeof *s);
+    if (length > UINT32_MAX) return 0;
 
     s->bytes  = bytes;
     s->length = length;
@@ -52,6 +53,7 @@ int wgsl_source_init(WGSLSource *s, const char *bytes, size_t length) {
     if (cap < 16)        cap = 16;
     if (cap > 1u << 20)  cap = 1u << 20;
 
+    if (cap > SIZE_MAX / sizeof *s->line_starts) return 0;
     s->line_starts = (uint32_t *)malloc(cap * sizeof *s->line_starts);
     if (!s->line_starts) {
         memset(s, 0, sizeof *s);
@@ -73,7 +75,17 @@ int wgsl_source_init(WGSLSource *s, const char *bytes, size_t length) {
             uint32_t next = (uint32_t)(i + (size_t)consumed);
 
             if (s->line_count + 1 > cap) {
+                if (cap > SIZE_MAX / 2) {
+                    free(s->line_starts);
+                    memset(s, 0, sizeof *s);
+                    return 0;
+                }
                 size_t new_cap = cap * 2;
+                if (new_cap > SIZE_MAX / sizeof *s->line_starts) {
+                    free(s->line_starts);
+                    memset(s, 0, sizeof *s);
+                    return 0;
+                }
                 uint32_t *grown = (uint32_t *)realloc(
                     s->line_starts, new_cap * sizeof *s->line_starts);
                 if (!grown) {

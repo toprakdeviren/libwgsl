@@ -23,6 +23,7 @@
 #include "internal/check.h"
 #include "internal/consteval.h"
 #include "internal/diag.h"
+#include "internal/layout.h"
 #include "internal/lexer.h"
 #include "internal/parser.h"
 #include "internal/resolver.h"
@@ -59,15 +60,23 @@ struct WGSLResult {
     int                json_built;
 };
 
-/* Stand-in result to honour the "always non-NULL" contract on OOM. */
-static WGSLResult *make_empty_result(void) {
+static int add_size_checked(size_t a, size_t b, size_t *out) {
+    if (a > SIZE_MAX - b) return 0;
+    *out = a + b;
+    return 1;
+}
+
+/* Stand-in result for failures that happen before a normal result exists. */
+static WGSLResult *make_error_result(const char *message) {
     WGSLResult *r = (WGSLResult *)calloc(1, sizeof *r);
     if (!r) return NULL;
     wgsl_arena_init(&r->arena);
     wgsl_diag_init (&r->diag);
-    /* `wgsl_source_init` succeeds on a zero-length input. */
-    wgsl_source_init(&r->source, "", 0);
-    wgsl_types_init (&r->types, &r->arena);
+    if (wgsl_source_init(&r->source, "", 0)) {
+        wgsl_diag_emit_at(&r->diag, &r->source, WGSL_DIAG_ERROR, 0, 0, NULL,
+                          "%s", message ? message : "WGSL frontend error");
+    }
+    (void)wgsl_types_init(&r->types, &r->arena);
     return r;
 }
 
@@ -99,6 +108,10 @@ WGSLResult *wgsl_check(const char *src) {
 WGSLResult *wgsl_check_n(const char *src, size_t src_len) {
     wgsl_utf8_init();
 
+    if (src_len > UINT32_MAX) {
+        return make_error_result("source is too large for 32-bit WGSL spans");
+    }
+
     WGSLResult *r = (WGSLResult *)calloc(1, sizeof *r);
     if (!r) return NULL;
 
@@ -110,7 +123,7 @@ WGSLResult *wgsl_check_n(const char *src, size_t src_len) {
     r->src_copy = (char *)malloc(r->src_len + 1);
     if (!r->src_copy) {
         free(r);
-        return make_empty_result();
+        return make_error_result("out of memory while copying WGSL source");
     }
     if (r->src_len > 0) memcpy(r->src_copy, src, r->src_len);
     r->src_copy[r->src_len] = '\0';
@@ -122,13 +135,36 @@ WGSLResult *wgsl_check_n(const char *src, size_t src_len) {
         wgsl_arena_destroy(&r->arena);
         free(r->src_copy);
         free(r);
-        return make_empty_result();
+        return make_error_result("out of memory while indexing WGSL source");
     }
 
     int lex_ok    = wgsl_tokenize(&r->source, &r->arena, &r->diag, &r->lex);
+    if (!r->lex.tokens || r->lex.count == 0 ||
+        r->lex.tokens[r->lex.count - 1].kind != WGSL_TOK_EOF)
+    {
+        if (!wgsl_diag_has_error(&r->diag)) {
+            wgsl_diag_emit_at(&r->diag, &r->source, WGSL_DIAG_ERROR, 0, 0, NULL,
+                              "lexer failed before producing EOF token");
+        }
+        r->pipeline_ok = 0;
+        return r;
+    }
+
     int parse_ok  = wgsl_parse(&r->lex, &r->source, &r->arena, &r->diag, &r->ast);
+    if (!r->ast.root) {
+        if (!wgsl_diag_has_error(&r->diag)) {
+            wgsl_diag_emit_at(&r->diag, &r->source, WGSL_DIAG_ERROR, 0, 0, NULL,
+                              "parser failed before producing an AST");
+        }
+        r->pipeline_ok = 0;
+        return r;
+    }
 
     if (!wgsl_types_init(&r->types, &r->arena)) {
+        if (!wgsl_diag_has_error(&r->diag)) {
+            wgsl_diag_emit_at(&r->diag, &r->source, WGSL_DIAG_ERROR, 0, 0, NULL,
+                              "out of memory while initializing WGSL types");
+        }
         r->pipeline_ok = 0;
         return r;
     }
@@ -161,10 +197,19 @@ WGSLResult *wgsl_check_with_preamble(
      * boundary doesn't fuse two tokens into one (e.g. `xyz` at
      * preamble end + `abc` at src start). */
     int need_sep = preamble_len > 0 && preamble[preamble_len - 1] != '\n';
-    size_t total = preamble_len + (need_sep ? 1u : 0u) + src_len;
+    size_t total = 0;
+    if (!add_size_checked(preamble_len, need_sep ? 1u : 0u, &total) ||
+        !add_size_checked(total, src_len, &total) ||
+        total == SIZE_MAX)
+    {
+        return make_error_result("source and preamble length overflow");
+    }
+    if (total > UINT32_MAX) {
+        return make_error_result("combined source is too large for 32-bit WGSL spans");
+    }
 
     char *joined = (char *)malloc(total + 1);
-    if (!joined) return NULL;
+    if (!joined) return make_error_result("out of memory while joining WGSL preamble");
     if (preamble_len > 0) memcpy(joined, preamble, preamble_len);
     size_t off = preamble_len;
     if (need_sep) joined[off++] = '\n';
@@ -217,9 +262,20 @@ typedef struct {
 
 static void jb_grow(JsonBuf *j, size_t need) {
     if (j->oom) return;
-    if (j->len + need + 1 <= j->cap) return;
+    if (need > SIZE_MAX - j->len || j->len + need == SIZE_MAX) {
+        j->oom = 1;
+        return;
+    }
+    size_t want = j->len + need + 1;
+    if (want <= j->cap) return;
     size_t cap = j->cap ? j->cap : 256;
-    while (cap < j->len + need + 1) cap *= 2;
+    while (cap < want) {
+        if (cap > SIZE_MAX / 2) {
+            cap = want;
+            break;
+        }
+        cap *= 2;
+    }
     char *g = (char *)realloc(j->buf, cap);
     if (!g) { j->oom = 1; return; }
     j->buf = g;
@@ -279,7 +335,13 @@ static void jb_put_jstr(JsonBuf *j, const char *s, size_t n) {
 static void jb_put_span(JsonBuf *j, const WGSLSource *src,
                         uint32_t off, uint32_t len)
 {
-    if (off + len > src->length) { jb_puts(j, "\"\""); return; }
+    if (!src || !src->bytes ||
+        len > UINT32_MAX - off ||
+        (size_t)off + (size_t)len > src->length)
+    {
+        jb_puts(j, "\"\"");
+        return;
+    }
     jb_put_jstr(j, src->bytes + off, len);
 }
 
@@ -457,6 +519,12 @@ static void emit_structs(WGSLResult *r, JsonBuf *j) {
     int first = 1;
     if (!r->ast.root) { jb_putc(j, ']'); return; }
     WGSLNode *tu = r->ast.root;
+    /* Layout is computed per spec §14.4.2 using the default address
+     * space (WGSL_AS_NONE, i.e. AlignOf without uniform-AS bump).  A
+     * struct used as `var<uniform>` would re-walk with WGSL_AS_UNIFORM;
+     * the validator already enforces that case.  For module-JSON the
+     * default layout is the most useful baseline for engine bindings. */
+    WGSLLayoutCtx lcx = { &r->tc, &r->cev, &r->source };
     for (uint32_t i = 0; i < tu->child_count; i++) {
         WGSLNode *n = tu->children[i];
         if (!n || n->kind != WGSL_NODE_DECL_STRUCT) continue;
@@ -467,8 +535,28 @@ static void emit_structs(WGSLResult *r, JsonBuf *j) {
         uint32_t no = (uint32_t)(n->payload[0] & 0xFFFFFFFFu);
         uint32_t nl = (uint32_t)(n->payload[0] >> 32);
         jb_put_span(j, &r->source, no, nl);
+
+        /* Resolve the struct's TypeInfo (member 0 of all_decls is the
+         * struct symbol with `sym->type` set during typecheck).  Walk
+         * once to fill offsets[]. */
+        const WGSLTypeInfo *st = NULL;
+        for (size_t s = 0; s < r->res.all_decl_count; s++) {
+            if (r->res.all_decls[s]->ast == n) {
+                st = r->res.all_decls[s]->type;
+                break;
+            }
+        }
+        uint32_t offsets[64], salign = 0, ssize = 0;
+        int have_layout = st &&
+            wgsl_layout_struct(&lcx, st, WGSL_AS_NONE, offsets, 64, &salign, &ssize);
+        if (have_layout) {
+            jb_puts(j, ",\"size\":");      jb_put_int(j, ssize);
+            jb_puts(j, ",\"align\":");     jb_put_int(j, salign);
+        }
+
         jb_puts(j, ",\"members\":[");
         int mfirst = 1;
+        uint32_t midx = 0;
         for (uint32_t k = 0; k < n->child_count; k++) {
             WGSLNode *m = n->children[k];
             if (!m || m->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
@@ -488,7 +576,13 @@ static void emit_structs(WGSLResult *r, JsonBuf *j) {
                 mt = wgsl_typecheck_type_of(&r->tc, m->children[MA]);
             }
             jb_put_type(j, mt);
+            if (have_layout && midx < 64) {
+                jb_puts(j, ",\"offset\":"); jb_put_int(j, offsets[midx]);
+                jb_puts(j, ",\"size\":");   jb_put_int(j, wgsl_layout_size_of(&lcx, mt, WGSL_AS_NONE));
+                jb_puts(j, ",\"align\":");  jb_put_int(j, wgsl_layout_align_of(&lcx, mt, WGSL_AS_NONE));
+            }
             jb_putc(j, '}');
+            midx += 1;
         }
         jb_puts(j, "]}");
     }
@@ -725,6 +819,11 @@ static int collect_lex_tokens(
 
     WGSLLexToken *out = NULL;
     if (total > 0) {
+        if (total > (size_t)INT32_MAX ||
+            total > SIZE_MAX / sizeof *out)
+        {
+            return 0;
+        }
         out = (WGSLLexToken *)malloc(total * sizeof *out);
         if (!out) return 0;
     }
@@ -795,7 +894,9 @@ typedef struct {
 static void sem_push(SemList *L, uint32_t off, uint32_t len, WGSLLexTokenKind k) {
     if (len == 0) return;
     if (L->count == L->capacity) {
+        if (L->capacity > SIZE_MAX / 2) return;
         size_t cap = L->capacity ? L->capacity * 2 : 64;
+        if (cap > SIZE_MAX / sizeof *L->items) return;
         SemSpan *g = (SemSpan *)realloc(L->items, cap * sizeof *g);
         if (!g) return;
         L->items = g;
@@ -812,7 +913,8 @@ static WGSLLexTokenKind kind_for_sym(const WGSLSymbol *s) {
     case WGSL_SYM_PREDECLARED_FN:         return WGSL_LEX_BUILTIN_FUNC;
     case WGSL_SYM_PREDECLARED_VALUE:      return WGSL_LEX_BUILTIN_VALUE;
     case WGSL_SYM_PREDECLARED_ADDR_SPACE:
-    case WGSL_SYM_PREDECLARED_ACCESS_MODE: return WGSL_LEX_KEYWORD;
+    case WGSL_SYM_PREDECLARED_ACCESS_MODE:
+    case WGSL_SYM_PREDECLARED_TEXEL_FORMAT: return WGSL_LEX_KEYWORD;
     case WGSL_SYM_TYPE_ALIAS:             return WGSL_LEX_TYPE_ALIAS;
     case WGSL_SYM_STRUCT:                 return WGSL_LEX_STRUCT_NAME;
     case WGSL_SYM_FUNCTION:               return WGSL_LEX_FUNCTION_NAME;
@@ -1140,6 +1242,12 @@ static char *path_join(const char *a, const char *b) {
     size_t la = a ? strlen(a) : 0;
     size_t lb = b ? strlen(b) : 0;
     int    sep = (la > 0 && a[la - 1] != '/') ? 1 : 0;
+    if (la > SIZE_MAX - (size_t)sep ||
+        la + (size_t)sep > SIZE_MAX - lb ||
+        la + (size_t)sep + lb == SIZE_MAX)
+    {
+        return NULL;
+    }
     char  *out = (char *)malloc(la + (size_t)sep + lb + 1);
     if (!out) return NULL;
     if (la > 0) memcpy(out, a, la);
@@ -1199,6 +1307,11 @@ WGSLResult *wgsl_check_in_project(
         free(full);
         if (!one) { free(preamble); free(src); return NULL; }
         int sep = (one_len > 0 && one[one_len - 1] != '\n') ? 1 : 0;
+        if (plen > SIZE_MAX - one_len ||
+            plen + one_len > SIZE_MAX - (size_t)sep)
+        {
+            free(one); free(preamble); free(src); return NULL;
+        }
         char *grown = (char *)realloc(preamble, plen + one_len + (size_t)sep);
         if (!grown) { free(one); free(preamble); free(src); return NULL; }
         preamble = grown;

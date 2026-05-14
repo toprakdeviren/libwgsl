@@ -6,6 +6,7 @@
  * frees them in `wgsl_project_close`.
  */
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,6 +24,7 @@ struct WGSLProject {
 static char *xstrdup(const char *s) {
     if (!s) return NULL;
     size_t n = strlen(s);
+    if (n == SIZE_MAX) return NULL;
     char *o = (char *)malloc(n + 1);
     if (!o) return NULL;
     memcpy(o, s, n + 1);
@@ -30,8 +32,13 @@ static char *xstrdup(const char *s) {
 }
 
 static int xpush(char ***arr, int *n, const char *s) {
+    if (!n || *n < 0 || *n == INT32_MAX) return 0;
     char *dup = xstrdup(s);
     if (!dup) return 0;
+    if ((size_t)(*n + 1) > SIZE_MAX / sizeof(char *)) {
+        free(dup);
+        return 0;
+    }
     char **grown = (char **)realloc(*arr, (size_t)(*n + 1) * sizeof(char *));
     if (!grown) { free(dup); return 0; }
     grown[*n] = dup;
@@ -104,12 +111,20 @@ const char *const *wgsl_project_match(
     /* No globs declared → never inject (treat as opt-in). */
     if (p->glob_count == 0) return NULL;
 
-    /* Self-preamble exclusion: a preamble file matching its own
-     * inject globs would otherwise compile under itself, which never
-     * makes sense.  Skip when `file_path` is one of the preamble
-     * files. */
+    /* Preamble files compose left-to-right: preamble[k] sees
+     * preamble[0..k-1] prepended, never itself or anything later.
+     * Self-injection would compile a file under its own definitions
+     * (nonsense); later preambles often *depend* on `file_path`, so
+     * injecting them here would generate a forward reference.  Match
+     * is unconditional — preamble files always receive their prefix
+     * regardless of the inject globs (the globs gate which non-
+     * preamble files opt in, not the preambles' own composition). */
     for (int i = 0; i < p->preamble_count; i++) {
-        if (strcmp(p->preamble_files[i], file_path) == 0) return NULL;
+        if (strcmp(p->preamble_files[i], file_path) == 0) {
+            if (i == 0) return NULL;          /* nothing precedes the first preamble */
+            if (out_count) *out_count = i;
+            return (const char *const *)p->preamble_files;
+        }
     }
 
     for (int i = 0; i < p->glob_count; i++) {

@@ -47,7 +47,9 @@ static int is_ascii_blankspace(uint8_t c) {
 }
 
 static int grow_tokens(L *l) {
+    if (l->capacity > SIZE_MAX / 2) return 0;
     size_t new_cap = l->capacity ? l->capacity * 2 : WGSL_LEX_INITIAL_CAPACITY;
+    if (new_cap > SIZE_MAX / sizeof *l->tokens) return 0;
     WGSLToken *grown = (WGSLToken *)realloc(l->tokens, new_cap * sizeof *grown);
     if (!grown) return 0;
     l->tokens   = grown;
@@ -108,12 +110,25 @@ static int scan_line_comment(L *l) {
     while (l->pos < l->length) {
         uint8_t b = l->bytes[l->pos];
         /* Stop at any line break.  Per §3.2: LF VT FF CR NEL LS PS. */
-        if (b == 0x0Au || b == 0x0Bu || b == 0x0Cu || b == 0x0Du) break;
-        if (b == 0xC2u && l->pos + 1 < l->length && l->bytes[l->pos + 1] == 0x85u) break;
-        if (b == 0xE2u && l->pos + 2 < l->length &&
-            l->bytes[l->pos + 1] == 0x80u &&
-            (l->bytes[l->pos + 2] == 0xA8u || l->bytes[l->pos + 2] == 0xA9u)) break;
-        l->pos += 1;
+        if (b < 0x80u) {
+            if (b == 0) {
+                emit_error(l, (uint32_t)l->pos, 1,
+                           "null code point (U+0000) is not allowed");
+                l->pos += 1;
+                return 0;
+            }
+            if (b == 0x0Au || b == 0x0Bu || b == 0x0Cu || b == 0x0Du) break;
+            l->pos += 1;
+            continue;
+        }
+        WGSLUtf8Decode d = wgsl_utf8_step(l->bytes + l->pos, l->length - l->pos);
+        if (!d.consumed) {
+            emit_error(l, (uint32_t)l->pos, 1, "invalid UTF-8 in line comment");
+            l->pos += 1;
+            return 0;
+        }
+        if (d.code_point == 0x85u || d.code_point == 0x2028u || d.code_point == 0x2029u) break;
+        l->pos += (size_t)d.consumed;
     }
     return push_tok(l, WGSL_TOK_LINE_COMMENT,
                     (uint32_t)start, (uint32_t)(l->pos - start), 0);
@@ -138,6 +153,12 @@ static int scan_block_comment(L *l) {
         }
         /* Advance one code point; UTF-8-validate as we go. */
         if (l->bytes[l->pos] < 0x80u) {
+            if (l->bytes[l->pos] == 0) {
+                emit_error(l, (uint32_t)l->pos, 1,
+                           "null code point (U+0000) is not allowed");
+                l->pos += 1;
+                return 0;
+            }
             l->pos += 1;
         } else {
             WGSLUtf8Decode d = wgsl_utf8_step(l->bytes + l->pos, l->length - l->pos);
@@ -272,6 +293,11 @@ static int scan_number(L *l) {
                        "hex float must have at least one hex digit");
             return 0;
         }
+        if (is_float && has_dot && !has_exp && hex_frac_len == 0) {
+            emit_error(l, (uint32_t)start, (uint32_t)(l->pos - start),
+                       "hex float with trailing dot requires an exponent");
+            return 0;
+        }
         goto suffix_check;
     }
 
@@ -330,7 +356,14 @@ suffix_check:
             if      (c == 'i') { suffix = WGSL_NUM_SUFFIX_I; l->pos += 1; }
             else if (c == 'u') { suffix = WGSL_NUM_SUFFIX_U; l->pos += 1; }
             else if (c == 'f') { suffix = WGSL_NUM_SUFFIX_F; l->pos += 1; is_float = 1; }
-            else if (c == 'h') { suffix = WGSL_NUM_SUFFIX_H; l->pos += 1; is_float = 1; }
+            else if (c == 'h') {
+                if (is_hex) {
+                    emit_error(l, (uint32_t)start, (uint32_t)(l->pos + 1 - start),
+                               "hex integer literal cannot use 'h' float suffix");
+                    return 0;
+                }
+                suffix = WGSL_NUM_SUFFIX_H; l->pos += 1; is_float = 1;
+            }
         }
     }
 
@@ -429,6 +462,11 @@ static int scan_punct_or_op(L *l) {
         if (b2 == '=') { l->pos += 2; return push_tok(l, WGSL_TOK_EQUAL_EQUAL, start, 2, 0); }
         l->pos++; return push_tok(l, WGSL_TOK_EQUAL, start, 1, 0);
 
+    case 0:
+        emit_error(l, start, 1, "null code point (U+0000) is not allowed");
+        l->pos++;
+        return 0;
+
     default:
         emit_error(l, start, 1,
                    "unexpected character '%c' (0x%02X)",
@@ -484,6 +522,12 @@ int wgsl_tokenize(
     WGSLLexResult    *out)
 {
     if (!source || !arena || !diag || !out) return 0;
+    memset(out, 0, sizeof *out);
+    if (source->length > UINT32_MAX) {
+        wgsl_diag_emit_at(diag, source, WGSL_DIAG_ERROR, 0, 0, NULL,
+                          "source is too large for 32-bit WGSL spans");
+        return 0;
+    }
 
     L l;
     memset(&l, 0, sizeof l);
@@ -504,9 +548,16 @@ int wgsl_tokenize(
     }
 
     /* Always close with EOF, even on error, so consumers can rely on it. */
-    push_tok(&l, WGSL_TOK_EOF, (uint32_t)l.length, 0, 0);
+    if (!push_tok(&l, WGSL_TOK_EOF, (uint32_t)l.length, 0, 0)) {
+        free(l.tokens);
+        return 0;
+    }
 
     /* Copy heap dynamic array into the long-lived arena. */
+    if (l.count > SIZE_MAX / sizeof *l.tokens) {
+        free(l.tokens);
+        return 0;
+    }
     WGSLToken *arena_tokens =
         (WGSLToken *)wgsl_arena_alloc(arena, l.count * sizeof *arena_tokens);
     if (!arena_tokens) {
@@ -563,7 +614,9 @@ typedef struct {
 } TplOut;
 
 static int tpl_grow(TplOut *o) {
+    if (o->capacity > SIZE_MAX / 2) return 0;
     size_t new_cap = o->capacity ? o->capacity * 2 : 64;
+    if (new_cap > SIZE_MAX / sizeof *o->out) return 0;
     WGSLToken *grown = (WGSLToken *)realloc(o->out, new_cap * sizeof *grown);
     if (!grown) return 0;
     o->out = grown;
@@ -699,8 +752,11 @@ int wgsl_discover_templates(WGSLLexResult *result, WGSLArena *arena) {
             if (sp > 0 && stack[sp - 1].depth == depth) {
                 if (!tpl_split_greater(&o, stack, &sp, depth, t,
                                        WGSL_TOK_EQUAL, 1)) goto oom;
-                /* The trailing `=` is a lone assignment — clears stack. */
+                /* §3.9: the trailing `=` is a lone assignment.
+                 * Spec assignment rule clears BOTH the pending stack
+                 * AND the nesting depth. */
                 sp = 0;
+                depth = 0;
             } else {
                 if (!tpl_append(&o, t)) goto oom;
             }
@@ -708,8 +764,35 @@ int wgsl_discover_templates(WGSLLexResult *result, WGSLArena *arena) {
 
         case WGSL_TOK_GREATER_GREATER_EQUAL:
             if (sp > 0 && stack[sp - 1].depth == depth) {
+                /* Close inner template with leading `>`; emit `>=` tail. */
                 if (!tpl_split_greater(&o, stack, &sp, depth, t,
                                        WGSL_TOK_GREATER_EQUAL, 2)) goto oom;
+                /* §3.9: re-examine the tail's leading `>` for closing
+                 * a second pending template at the same depth (the
+                 * `A<B<C>>=D` case).  If we close another, the trailing
+                 * `=` is then a lone assignment and clears state. */
+                if (sp > 0 && stack[sp - 1].depth == depth) {
+                    /* Split the just-emitted `>=` tail at o.out[o.count - 1]
+                     * into TEMPLATE_END + EQUAL. */
+                    size_t tail_idx = o.count - 1;
+                    WGSLToken tail = o.out[tail_idx];
+                    o.out[tail_idx].kind        = WGSL_TOK_TEMPLATE_END;
+                    o.out[tail_idx].span.length = 1;
+                    /* Retag matching LESS as TEMPLATE_START + pop. */
+                    size_t less_idx = stack[sp - 1].out_idx;
+                    o.out[less_idx].kind = WGSL_TOK_TEMPLATE_START;
+                    sp -= 1;
+                    /* Append the trailing `=` as a fresh EQUAL token. */
+                    WGSLToken eq = tail;
+                    eq.kind        = WGSL_TOK_EQUAL;
+                    eq.span.offset = tail.span.offset + 1;
+                    eq.span.length = 1;
+                    eq.column      = tail.column + 1;
+                    if (!tpl_append(&o, eq)) goto oom;
+                    /* `=` clears state (spec). */
+                    sp = 0;
+                    depth = 0;
+                }
             } else {
                 if (!tpl_append(&o, t)) goto oom;
             }
@@ -746,9 +829,13 @@ int wgsl_discover_templates(WGSLLexResult *result, WGSLArena *arena) {
             break;
 
         case WGSL_TOK_EQUAL:
-            /* Lone `=` → assignment.  Anything pending isn't a template. */
+            /* §3.9: a lone `=` is an assignment, which cannot appear
+             * inside an expression and therefore cannot appear in a
+             * template list.  Spec clears BOTH the pending stack AND
+             * the nesting depth. */
             if (!tpl_append(&o, t)) goto oom;
             sp = 0;
+            depth = 0;
             break;
 
         default:
@@ -761,6 +848,7 @@ int wgsl_discover_templates(WGSLLexResult *result, WGSLArena *arena) {
 
     /* Copy the rebuilt stream into the arena, replacing the old. */
     WGSLToken *arena_out =
+        (o.count > SIZE_MAX / sizeof *arena_out) ? NULL :
         (WGSLToken *)wgsl_arena_alloc(arena, o.count * sizeof *arena_out);
     if (!arena_out) goto oom;
     memcpy(arena_out, o.out, o.count * sizeof *arena_out);

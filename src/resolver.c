@@ -26,7 +26,9 @@
 #define SCOPE_INITIAL_CAP 16
 
 static int scope_grow(WGSLScope *s) {
+    if (s->capacity > SIZE_MAX / 2) return 0;
     size_t cap = s->capacity ? s->capacity * 2 : SCOPE_INITIAL_CAP;
+    if (cap > SIZE_MAX / sizeof *s->items) return 0;
     WGSLSymbol **g = (WGSLSymbol **)realloc(s->items, cap * sizeof(*g));
     if (!g) return 0;
     s->items    = g;
@@ -112,28 +114,46 @@ static void populate_predeclared(WGSLResolver *r) {
 
     /* Type generators (§6.2.6–9, §6.5).  No baked-in TypeInfo — they
      * resolve to a kind, the type checker materializes them with
-     * template args. */
+     * template args.  Texture flavours that take template args stay
+     * here; texture flavours with a fixed shape (depth / external /
+     * sampler) are registered as PREDECLARED_TYPE below with the
+     * shape baked into the store. */
     static const char *typegens[] = {
         "vec2", "vec3", "vec4",
         "mat2x2", "mat2x3", "mat2x4",
         "mat3x2", "mat3x3", "mat3x4",
         "mat4x2", "mat4x3", "mat4x4",
         "atomic", "array", "ptr",
-        /* Texture and sampler kinds (§6.5). */
+        /* Texture kinds that take template args (§6.5). */
         "texture_1d", "texture_2d", "texture_2d_array",
         "texture_3d", "texture_cube", "texture_cube_array",
         "texture_multisampled_2d",
-        "texture_external",
         "texture_storage_1d", "texture_storage_2d",
         "texture_storage_2d_array", "texture_storage_3d",
-        "texture_depth_2d", "texture_depth_2d_array",
-        "texture_depth_cube", "texture_depth_cube_array",
-        "texture_depth_multisampled_2d",
-        "sampler", "sampler_comparison",
     };
     for (size_t i = 0; i < sizeof typegens / sizeof typegens[0]; i++) {
         add_pred_type(r, typegens[i], WGSL_SYM_PREDECLARED_TYPEGEN, NULL);
     }
+
+    /* Fixed-shape opaque handle types (§6.5).  Baked into the store
+     * so resolve_type_spec hits the PREDECLARED_TYPE fast path. */
+    static const struct { const char *name; WGSLTextureDim dim; } fixed_textures[] = {
+        { "texture_external",               WGSL_TEX_DIM_EXTERNAL },
+        { "texture_depth_2d",               WGSL_TEX_DIM_DEPTH_2D },
+        { "texture_depth_2d_array",         WGSL_TEX_DIM_DEPTH_2D_ARRAY },
+        { "texture_depth_cube",             WGSL_TEX_DIM_DEPTH_CUBE },
+        { "texture_depth_cube_array",       WGSL_TEX_DIM_DEPTH_CUBE_ARRAY },
+        { "texture_depth_multisampled_2d",  WGSL_TEX_DIM_DEPTH_MULTISAMPLED_2D },
+    };
+    for (size_t i = 0; i < sizeof fixed_textures / sizeof fixed_textures[0]; i++) {
+        WGSLTypeInfo *t = wgsl_type_texture(
+            ts, fixed_textures[i].dim, NULL, WGSL_TEX_FORMAT_NONE, WGSL_ACCESS_NONE);
+        add_pred_type(r, fixed_textures[i].name, WGSL_SYM_PREDECLARED_TYPE, t);
+    }
+    add_pred_type(r, "sampler",            WGSL_SYM_PREDECLARED_TYPE,
+                  wgsl_type_sampler(ts, 0));
+    add_pred_type(r, "sampler_comparison", WGSL_SYM_PREDECLARED_TYPE,
+                  wgsl_type_sampler(ts, 1));
 
     /* Predeclared type aliases (§6.9):
      *   vecN with elem in {i32, u32, f32, f16}                  → 12
@@ -176,6 +196,7 @@ static void populate_predeclared(WGSLResolver *r) {
     static const char *addr_spaces[] = {
         "function", "private", "workgroup",
         "uniform", "storage", "handle", "push_constant",
+        "immediate",
     };
     for (size_t i = 0; i < sizeof addr_spaces / sizeof addr_spaces[0]; i++) {
         add_pred_value(r, addr_spaces[i], WGSL_SYM_PREDECLARED_ADDR_SPACE);
@@ -187,75 +208,33 @@ static void populate_predeclared(WGSLResolver *r) {
         add_pred_value(r, access_modes[i], WGSL_SYM_PREDECLARED_ACCESS_MODE);
     }
 
-    /* Builtin functions (§17).  Names only — Phase 7 will own
-     * signatures via def/wgsl.def + codegen. */
-    static const char *builtin_fns[] = {
-        /* §17.2 Bit reinterpretation. */
-        "bitcast",
-        /* §17.3 Logical. */
-        "all", "any", "select",
-        /* §17.4 Array. */
-        "arrayLength",
-        /* §17.5 Numeric (63 fns). */
-        "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh",
-        "ceil", "clamp", "cos", "cosh",
-        "countLeadingZeros", "countOneBits", "countTrailingZeros",
-        "cross", "degrees", "determinant", "distance",
-        "dot", "dot4U8Packed", "dot4I8Packed",
-        "exp", "exp2", "extractBits",
-        "faceForward", "firstLeadingBit", "firstTrailingBit",
-        "floor", "fma", "fract", "frexp",
-        "insertBits", "inverseSqrt", "ldexp", "length",
-        "log", "log2", "max", "min", "mix", "modf",
-        "normalize", "pow", "quantizeToF16", "radians",
-        "reflect", "refract", "reverseBits", "round",
-        "saturate", "sign", "sin", "sinh", "smoothstep",
-        "sqrt", "step", "tan", "tanh", "transpose", "trunc",
-        /* §17.6 Derivative. */
-        "dpdx", "dpdy", "fwidth",
-        "dpdxCoarse", "dpdyCoarse", "fwidthCoarse",
-        "dpdxFine", "dpdyFine", "fwidthFine",
-        /* §17.7 Texture (15). */
-        "textureDimensions",
-        "textureGather", "textureGatherCompare",
-        "textureLoad",
-        "textureNumLayers", "textureNumLevels", "textureNumSamples",
-        "textureSample", "textureSampleBias",
-        "textureSampleCompare", "textureSampleCompareLevel",
-        "textureSampleGrad", "textureSampleLevel",
-        "textureSampleBaseClampToEdge",
-        "textureStore",
-        /* §17.8 Atomic. */
-        "atomicLoad", "atomicStore",
-        "atomicAdd", "atomicSub",
-        "atomicMax", "atomicMin",
-        "atomicAnd", "atomicOr", "atomicXor",
-        "atomicExchange", "atomicCompareExchangeWeak",
-        /* §17.9–10 Pack / unpack. */
-        "pack4x8snorm", "pack4x8unorm",
-        "pack4xI8", "pack4xU8", "pack4xI8Clamp", "pack4xU8Clamp",
-        "pack2x16snorm", "pack2x16unorm", "pack2x16float",
-        "unpack4x8snorm", "unpack4x8unorm",
-        "unpack4xI8", "unpack4xU8",
-        "unpack2x16snorm", "unpack2x16unorm", "unpack2x16float",
-        /* §17.11 Synchronization. */
-        "storageBarrier", "textureBarrier",
-        "workgroupBarrier", "workgroupUniformLoad",
-        /* §17.12 Subgroup. */
-        "subgroupAdd", "subgroupAll", "subgroupAnd", "subgroupAny",
-        "subgroupBallot", "subgroupBroadcast", "subgroupBroadcastFirst",
-        "subgroupElect",
-        "subgroupExclusiveAdd", "subgroupExclusiveMul",
-        "subgroupInclusiveAdd", "subgroupInclusiveMul",
-        "subgroupMax", "subgroupMin", "subgroupMul",
-        "subgroupOr", "subgroupShuffle",
-        "subgroupShuffleDown", "subgroupShuffleUp", "subgroupShuffleXor",
-        "subgroupXor",
-        /* §17.13 Quad. */
-        "quadBroadcast", "quadSwapDiagonal", "quadSwapX", "quadSwapY",
+    /* Texel formats (§6.5.10) — template arg #1 on texture_storage_*. */
+    static const char *texel_formats[] = {
+        "r8unorm",      "r8snorm",      "r8uint",       "r8sint",
+        "r16uint",      "r16sint",      "r16float",
+        "rg8unorm",     "rg8snorm",     "rg8uint",      "rg8sint",
+        "r32uint",      "r32sint",      "r32float",
+        "rg16uint",     "rg16sint",     "rg16float",
+        "rgba8unorm",   "rgba8unorm_srgb", "rgba8snorm", "rgba8uint", "rgba8sint",
+        "bgra8unorm",   "bgra8unorm_srgb", "rgb10a2unorm", "rg11b10float",
+        "rg32uint",     "rg32sint",     "rg32float",
+        "rgba16uint",   "rgba16sint",   "rgba16float",
+        "rgba32uint",   "rgba32sint",   "rgba32float",
+        /* texture_formats_tier1 extras (§6.5.10). */
+        "r16unorm",     "r16snorm",
+        "rg16unorm",    "rg16snorm",
+        "rgba16unorm",  "rgba16snorm",
+        "rgb10a2uint",  "rg11b10ufloat",
     };
-    for (size_t i = 0; i < sizeof builtin_fns / sizeof builtin_fns[0]; i++) {
-        add_pred_value(r, builtin_fns[i], WGSL_SYM_PREDECLARED_FN);
+    for (size_t i = 0; i < sizeof texel_formats / sizeof texel_formats[0]; i++) {
+        add_pred_value(r, texel_formats[i], WGSL_SYM_PREDECLARED_TEXEL_FORMAT);
+    }
+
+    /* Builtin functions (§17).  Names and typechecker metadata share
+     * the same source of truth: def/wgsl.def. */
+#include "builtins.names.gen.h"
+    for (size_t i = 0; i < sizeof kPredeclaredBuiltinNames / sizeof kPredeclaredBuiltinNames[0]; i++) {
+        add_pred_value(r, kPredeclaredBuiltinNames[i], WGSL_SYM_PREDECLARED_FN);
     }
 }
 
@@ -310,30 +289,8 @@ static void bind_decl(
     node_name(r, n, &name, &len);
     if (len == 0) return;
 
-    /* Predeclared *type* names (scalar / typegen / alias / addr_space /
-     * access_mode) live in the spec-reserved namespace and cannot be
-     * shadowed at any scope.  Predeclared *function* names (`step`,
-     * `length`, `dot`, …) are not reserved in practice — Tint/Naga
-     * accept `let step = …` and so do real-world shaders.  Phase 8
-     * (validator) owns the strict spec interpretation; the resolver
-     * matches the de-facto behaviour. */
-    WGSLSymbol *pred = scope_find_local(&r->predeclared, name, len);
-    if (pred) {
-        switch ((WGSLSymKind)pred->kind) {
-        case WGSL_SYM_PREDECLARED_TYPE:
-        case WGSL_SYM_PREDECLARED_TYPEGEN:
-        case WGSL_SYM_PREDECLARED_TYPE_ALIAS:
-        case WGSL_SYM_PREDECLARED_ADDR_SPACE:
-        case WGSL_SYM_PREDECLARED_ACCESS_MODE:
-            resolve_error(r, n,
-                "'%.*s' shadows a predeclared identifier",
-                (int)len, name);
-            return;
-        default:
-            /* Predeclared fn / value — shadow is allowed locally. */
-            break;
-        }
-    }
+    /* Predeclared identifiers (types, functions, builtins) reside in
+     * the root scope and are freely shadowable per WGSL §5.1. */
     if (scope_find_local(scope, name, len)) {
         resolve_error(r, n,
             "redeclaration of '%.*s' in the same scope",
@@ -348,7 +305,9 @@ static void bind_decl(
     /* Mirror into the flat all-decls list for AST→symbol reverse
      * lookup by later passes. */
     if (r->all_decl_count == r->all_decl_capacity) {
+        if (r->all_decl_capacity > SIZE_MAX / 2) return;
         size_t cap = r->all_decl_capacity ? r->all_decl_capacity * 2 : 32;
+        if (cap > SIZE_MAX / sizeof *r->all_decls) return;
         WGSLSymbol **g = (WGSLSymbol **)realloc(
             r->all_decls, cap * sizeof(*g));
         if (g) {
@@ -491,8 +450,25 @@ static void walk(WGSLResolver *r, WGSLNode *n) {
         return;
 
     case WGSL_NODE_DECL_STRUCT:
-        /* Members live in their own namespace; walk only their type-specs. */
-        walk_children(r, n);
+        /* Members live in their own namespace; check for duplicates. */
+        for (uint32_t i = 0; i < n->child_count; i++) {
+            WGSLNode *m1 = n->children[i];
+            if (!m1 || m1->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
+            const char *name1; uint32_t len1;
+            node_name(r, m1, &name1, &len1);
+            if (len1 == 0) continue;
+
+            for (uint32_t j = i + 1; j < n->child_count; j++) {
+                WGSLNode *m2 = n->children[j];
+                if (!m2 || m2->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
+                const char *name2; uint32_t len2;
+                node_name(r, m2, &name2, &len2);
+                if (len1 == len2 && memcmp(name1, name2, len1) == 0) {
+                    resolve_error(r, m2, "duplicate struct member '%.*s'", (int)len1, name1);
+                }
+            }
+            walk(r, m1); /* walk type-spec */
+        }
         return;
 
     case WGSL_NODE_DECL_STRUCT_MEMBER:
@@ -528,15 +504,15 @@ static void walk(WGSLResolver *r, WGSLNode *n) {
     case WGSL_NODE_STMT_FOR:
     case WGSL_NODE_STMT_LOOP:
     case WGSL_NODE_STMT_WHILE:
+    case WGSL_NODE_STMT_IF:
+    case WGSL_NODE_STMT_ELSE_IF:
+    case WGSL_NODE_STMT_ELSE:
+    case WGSL_NODE_STMT_SWITCH:
         push_scope(r);
         walk_children(r, n);
         pop_scope(r);
         return;
 
-    case WGSL_NODE_STMT_IF:
-    case WGSL_NODE_STMT_ELSE_IF:
-    case WGSL_NODE_STMT_ELSE:
-    case WGSL_NODE_STMT_SWITCH:
     case WGSL_NODE_STMT_CASE_CLAUSE:
     case WGSL_NODE_STMT_BREAK:
     case WGSL_NODE_STMT_BREAK_IF:

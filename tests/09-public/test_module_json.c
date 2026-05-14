@@ -126,6 +126,17 @@ int main(void) {
         CHECK(contains(j, "\"name\":\"uv\""),  "member uv");
         CHECK(contains(j, "\"type\":\"vec3<f32>\""), "pos type");
         CHECK(contains(j, "\"type\":\"vec2<f32>\""), "uv type");
+        /* §14.4 — per-member offset / size / align + struct totals.
+         * Vertex layout (default AS, AlignOf vec3<f32> = 16):
+         *   pos @ 0, size 12, align 16
+         *   uv  @ 16 (round_up(8, 12) = 16), size 8, align 8
+         *   struct align 16, size round_up(16, 24) = 32
+         * The check is positional: the "offset" key precedes its int.
+         * jb_put_int has no leading 0s so substring matches are safe. */
+        CHECK(contains(j, "\"offset\":0"),  "pos offset 0");
+        CHECK(contains(j, "\"offset\":16"), "uv offset 16");
+        CHECK(contains(j, "\"size\":32"),   "Vertex size 32");
+        CHECK(contains(j, "\"align\":16"),  "Vertex align 16");
         wgsl_free(r);
     }
 

@@ -167,6 +167,8 @@ int main(void) {
     expect_lex_error("0x",     "hex int without digits");
     expect_lex_error("1e",     "decimal float exponent without digits");
     expect_lex_error("0x1p",   "hex float exponent without digits");
+    expect_lex_error("0x3h",   "hex int with h suffix");
+    expect_lex_error("0xf.h",  "hex float trailing dot without exponent");
 
     if (fail == 0) {
         printf("PASS  test_lexer_numbers\n");

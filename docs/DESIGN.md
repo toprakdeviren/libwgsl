@@ -167,7 +167,7 @@ wgsl/
     DESIGN.md             This file
     SPEC-MAP.md           Per-§ pass ownership + risk
     REF-REVIEW.md         Tint + Naga structural review
-    BENCH.md              Phase 3.5 numbers (created at gate)
+    BENCH.md              Phase 3.5 numbers (generated at gate)
     MODULE_JSON.md        Schema for `wgsl_module_json` output
     wgsl/                 Turkish W3C spec reference (~6000 lines, 7 files)
 ```
@@ -250,7 +250,7 @@ a side-table keyed by `WGSLSymbol *`; resolver bookkeeping
 (`WGSLResolver.all_decls`) lets the evaluator do AST-decl-node →
 WGSLSymbol reverse lookup without keeping live scope chains.
 
-**v1 cap**: only the const-eval the spec demands at shader-creation
+**v1 cap**: only the const-eval the spec demands at shader-generation
 time. The Phase 6 deliverable supports:
 
   - scalar literal parse (decimal + hex int / hex float, all suffixes)

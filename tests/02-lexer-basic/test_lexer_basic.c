@@ -47,6 +47,14 @@ static void lex_run(Lex *l, const char *text) {
     l->ok = wgsl_tokenize(&l->src, &l->arena, &l->diag, &l->result);
 }
 
+static void lex_run_n(Lex *l, const char *text, size_t len) {
+    memset(l, 0, sizeof *l);
+    wgsl_arena_init(&l->arena);
+    wgsl_diag_init(&l->diag);
+    wgsl_source_init(&l->src, text, len);
+    l->ok = wgsl_tokenize(&l->src, &l->arena, &l->diag, &l->result);
+}
+
 static void lex_done(Lex *l) {
     wgsl_diag_destroy(&l->diag);
     wgsl_source_destroy(&l->src);
@@ -153,6 +161,15 @@ int main(void) {
         Lex l; lex_run(&l, "__bad");
         CHECK(l.ok == 0,                       "__: lex returns 0");
         CHECK(wgsl_diag_has_error(&l.diag),    "__: diag has error");
+        lex_done(&l);
+    }
+
+    /* — U+0000 is invalid even inside comments. — */
+    {
+        const char src[] = { '/', '/', ' ', 'x', '\0', 'y' };
+        Lex l; lex_run_n(&l, src, sizeof src);
+        CHECK(l.ok == 0,                       "nul comment: lex returns 0");
+        CHECK(wgsl_diag_has_error(&l.diag),    "nul comment: diag has error");
         lex_done(&l);
     }
 

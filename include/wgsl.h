@@ -94,8 +94,9 @@ const char *wgsl_unicode_version(void);
  * └──────────────────────────────────────────────────────────────────────────┘
  *
  *  `wgsl_check` runs the full pipeline: lex → parse → resolve → const-eval
- *  → type-check → validate.  It always returns a non-NULL `WGSLResult` that
- *  the caller owns.  Inspect `wgsl_ok` for the verdict and walk diagnostics
+ *  → type-check → validate.  It returns a caller-owned `WGSLResult`; NULL is
+ *  reserved for catastrophic allocation failure before an error result can be
+ *  constructed.  Inspect `wgsl_ok` for the verdict and walk diagnostics
  *  (section 4) for details.
  *
  *  WGSL has no `#include`, no module imports; one source file is one module.
@@ -106,7 +107,8 @@ const char *wgsl_unicode_version(void);
 /**
  * @brief Run the full WGSL frontend on a source string.
  * @param src  NUL-terminated WGSL source.  May be NULL (treated as empty).
- * @return     Non-NULL result.  Use `wgsl_ok()` to check the verdict.
+ * @return     Result handle, or NULL only on catastrophic allocation failure.
+ *             Use `wgsl_ok()` to check the verdict.
  */
 WGSLResult *wgsl_check(const char *src);
 
@@ -114,7 +116,7 @@ WGSLResult *wgsl_check(const char *src);
  * @brief Run the WGSL frontend on a non-NUL-terminated byte range.
  * @param src    Pointer to source bytes.  May be NULL when `src_len == 0`.
  * @param src_len  Length in bytes.  Source need not be NUL-terminated.
- * @return       Non-NULL result.
+ * @return       Result handle, or NULL only on catastrophic allocation failure.
  */
 WGSLResult *wgsl_check_n(const char *src, size_t src_len);
 
@@ -130,8 +132,9 @@ WGSLResult *wgsl_check_n(const char *src, size_t src_len);
 /**
  * @brief Did the module pass the full check (lex + parse + resolve + validate)?
  * @return 1 on success, 0 if any error-severity diagnostic was raised.
- *         A 0 return guarantees `wgsl_diagnostic_count(r) >= 1` with at
- *         least one `WGSL_DIAG_ERROR` entry.
+ *         For a non-NULL result, a 0 return guarantees
+ *         `wgsl_diagnostic_count(r) >= 1` with at least one
+ *         `WGSL_DIAG_ERROR` entry.
  */
 int wgsl_ok(const WGSLResult *r);
 

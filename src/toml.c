@@ -22,6 +22,7 @@
 static char *tdup(const char *s) {
     if (!s) return NULL;
     size_t n = strlen(s);
+    if (n == SIZE_MAX) return NULL;
     char *o = (char *)malloc(n + 1);
     if (!o) return NULL;
     memcpy(o, s, n + 1);
@@ -130,6 +131,10 @@ static char *p_parse_key(P *p) {
         return NULL;
     }
     size_t n = p->pos - start;
+    if (n == SIZE_MAX) {
+        p_error(p, "out of memory");
+        return NULL;
+    }
     char *out = (char *)malloc(n + 1);
     if (!out) { p_error(p, "out of memory"); return NULL; }
     memcpy(out, p->src + start, n);
@@ -158,10 +163,18 @@ static char *p_parse_string(P *p) {
         } else {
             scan_pos += 1;
         }
+        if (out_len == SIZE_MAX) {
+            p_error(p, "out of memory");
+            return NULL;
+        }
         out_len += 1;
     }
     if (scan_pos >= p->len) {
         p_error(p, "unterminated string");
+        return NULL;
+    }
+    if (out_len == SIZE_MAX) {
+        p_error(p, "out of memory");
         return NULL;
     }
     char *out = (char *)malloc(out_len + 1);
@@ -220,9 +233,24 @@ static char **p_parse_string_array(P *p, int *out_count) {
             return NULL;
         }
         if (n == cap) {
-            cap *= 2;
-            char **grown = (char **)realloc(items, cap * sizeof(char *));
+            if (cap > SIZE_MAX / 2) {
+                p_error(p, "out of memory");
+                free(s);
+                for (size_t i = 0; i < n; i++) free(items[i]);
+                free(items);
+                return NULL;
+            }
+            size_t new_cap = cap * 2;
+            if (new_cap > SIZE_MAX / sizeof(char *)) {
+                p_error(p, "out of memory");
+                free(s);
+                for (size_t i = 0; i < n; i++) free(items[i]);
+                free(items);
+                return NULL;
+            }
+            char **grown = (char **)realloc(items, new_cap * sizeof(char *));
             if (!grown) { p_error(p, "out of memory"); free(s); for (size_t i = 0; i < n; i++) free(items[i]); free(items); return NULL; }
+            cap = new_cap;
             items = grown;
         }
         items[n++] = s;
@@ -240,6 +268,12 @@ static char **p_parse_string_array(P *p, int *out_count) {
         return NULL;
     }
     p_advance(p);           /* consume `]` */
+    if (n > (size_t)INT32_MAX) {
+        p_error(p, "too many array items");
+        for (size_t i = 0; i < n; i++) free(items[i]);
+        free(items);
+        return NULL;
+    }
     *out_count = (int)n;
     return items;
 }
@@ -250,6 +284,11 @@ static WGSLToml *p_parse(P *p) {
     if (!t) { p_error(p, "out of memory"); return NULL; }
 
     char *cur_section = tdup("");
+    if (!cur_section) {
+        p_error(p, "out of memory");
+        wgsl_toml_free(t);
+        return NULL;
+    }
 
     WGSLTomlEntry *tail = NULL;
 
@@ -276,6 +315,14 @@ static WGSLToml *p_parse(P *p) {
                 char *more = p_parse_key(p);
                 if (!more) goto fail;
                 size_t add_len = strlen(more);
+                if (flat_len > SIZE_MAX - 1 ||
+                    flat_len + 1 > SIZE_MAX - add_len ||
+                    flat_len + 1 + add_len == SIZE_MAX)
+                {
+                    free(more);
+                    p_error(p, "out of memory");
+                    goto fail;
+                }
                 char *grown = (char *)malloc(flat_len + 1 + add_len + 1);
                 if (!grown) { free(more); p_error(p, "out of memory"); goto fail; }
                 memcpy(grown, cur_section, flat_len);
@@ -313,6 +360,12 @@ static WGSLToml *p_parse(P *p) {
         if (!e) { p_error(p, "out of memory"); free(key); goto fail; }
         e->section = tdup(cur_section);
         e->key     = key;
+        if (!e->section) {
+            p_error(p, "out of memory");
+            free(e->key);
+            free(e);
+            goto fail;
+        }
 
         if (p_peek(p) == '"') {
             char *v = p_parse_string(p);

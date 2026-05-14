@@ -1,0 +1,47 @@
+# ── libwgsl .gitignore ───────────────────────────────────────────────
+
+# Build artifacts
+.build/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.d
+*.js
+*.wasm
+
+# Generated headers (Phase 7 builtin table)
+src/check/builtins.gen.h
+src/builtins.names.gen.h
+
+# vendor-specific build artifacts (keep the source, ignore the binaries)
+vendor/**/*.a
+vendor/**/*.o
+vendor/**/*.d
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.clangd/
+compile_commands.json
+.cache/
+
+# Test output / coverage
+coverage/
+*.gcda
+*.gcno
+*.gcov

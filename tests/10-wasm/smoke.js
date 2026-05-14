@@ -9,7 +9,7 @@
  *   - `wgsl_check` on empty, valid, and intentionally-broken sources
  *   - diagnostic accessors round-trip
  *   - module JSON shape on a compute entry point
- *   - corpus parse: feed `03_linear.wgsl` straight through (the multi-
+ *   - corpus parse: feed `linear.wgsl` straight through (the multi-
  *     kernel file with unique resource names is the only corpus
  *     shader that compiles cleanly without `_shared.wgsl` prepended)
  *
@@ -118,28 +118,29 @@ WGSL().then(M => {
         wgsl_free(r);
     }
 
-    /* — Real-corpus shader (single-file, self-contained) — */
+    /* — Real example shader (single-file, self-contained) — */
     {
         const src = fs.readFileSync(
-            path.resolve(__dirname, '../../examples/shaders/03_linear.wgsl'),
+            path.resolve(__dirname, '../../examples/hello-triangle.wgsl'),
             'utf8');
         const r = wgsl_check(src);
         if (wgsl_ok(r) !== 1) {
-            console.error('  03_linear.wgsl error:', wgsl_error(r));
+            console.error('  hello-triangle.wgsl error:', wgsl_error(r));
         }
-        check(wgsl_ok(r) === 1,  '03_linear.wgsl: ok via wasm');
+        check(wgsl_ok(r) === 1,  'hello-triangle.wgsl: ok via wasm');
         const json = wgsl_module_json(r);
-        check(json.includes('"entry_points"'), '03_linear.wgsl: json shape');
-        check(json.includes('"stage":"compute"'), '03_linear.wgsl: compute entries');
+        check(json.includes('"entry_points"'), 'hello-triangle.wgsl: json shape');
+        check(json.includes('"stage":"vertex"'), 'hello-triangle.wgsl: vertex entry');
+        check(json.includes('"stage":"fragment"'), 'hello-triangle.wgsl: fragment entry');
         wgsl_free(r);
     }
 
     /* ── Extension-side FFI surface ──────────────────────────────────
      *
-     * The VS Code extension calls `wgsl_hover_at_into` /
-     * `wgsl_definition_at_into` / `wgsl_semantic_tokens` and reads the
+     * WASM embedders call `wgsl_hover_at_into` /
+     * `wgsl_definition_at_into` / `wgsl_semantic_tokens` and read the
      * struct fields at fixed offsets.  Validate the wasm32 layout
-     * here so the extension can rely on it. */
+     * here so bindings can rely on it. */
     const wgsl_hover_at_into = M.cwrap('wgsl_hover_at_into', null,
                                        ['number', 'number', 'number']);
     const wgsl_definition_at_into = M.cwrap('wgsl_definition_at_into', null,

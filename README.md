@@ -31,7 +31,7 @@ into editors and language servers.
 ## What it isn't
 
 - **A backend.** No SPIR-V / MSL / HLSL emission.
-- **A WebGPU runtime.** Pipeline creation, dispatch, and resource
+- **A WebGPU runtime.** Pipeline generation, dispatch, and resource
   management belong to the host engine.
 - **A formatter.** Reasonable add-on for v1.x; not on the v1 path.
 - **An incremental compiler.** Every `wgsl_check` runs the full
@@ -48,15 +48,16 @@ into editors and language servers.
 | Type system     |   ✅   | Abstract-type tower (§6.1.2), conversion rank, type interner. |
 | Resolver        |   ✅   | Predeclared scope, forward refs, kernel-split corpus convention. |
 | Const evaluator |   ✅   | Scalar + vec/mat operators, materialisation, `const_assert`. |
-| Type checker    |   ✅   | Hand-coded builtin overload table (~80 entries); composite + index expressions. |
-| Validator       |   ✅   | Recursion / cycle families, attribute conformance, behavior set, entry-point shape, address-space rules. |
+| Type checker    |   ✅   | Generated builtin overload rows, composite + index expressions. |
+| Validator       |   ✅   | Recursion / cycle families, attributes, behavior, entry points, address spaces, uniformity, alias analysis. |
 | Module summary  |   ✅   | JSON: entry points, resources, structs, overrides; schema in `docs/MODULE_JSON.md`. |
-| Memory layout   |   ◐   | Deferred (`docs/SPEC-GAPS.md` §14.4). |
-| Uniformity      |   ✗   | Deferred — multi-week sub-project per the risk register. |
-| Alias analysis  |   ✗   | Deferred — needs originating-variable propagation through the call graph. |
+| Memory layout   |   ✅   | Struct/resource layout validation and JSON layout summary. |
+| Uniformity      |   ✅   | CTS-clean validator behavior for the current WGSL compile corpus. |
+| Alias analysis  |   ✅   | Root-granularity call-site and module-scope alias checks. |
 
-`docs/SPEC-MAP.md` walks every WGSL spec section section-by-section;
-`docs/SPEC-GAPS.md` snapshots what's shipped, partial, or not started.
+The current external conformance signal is WebGPU CTS WGSL
+shader-module validation parity: 565,599 / 565,599 compile cases
+matched in the development harness.
 
 ## Public C API
 
@@ -98,7 +99,10 @@ own glob does not get itself prepended.
 
 ```sh
 make            # build .build/libwgsl.a
-make test       # build + run all tests under tests/* (~50 binaries)
+make test       # build + run native unit/API tests
+make cli        # build .build/wgsl
+make test-cli   # smoke-test the CLI
+make example-embedder # build + run examples/embedder.c
 make tsan       # build + run TSan smoke (tests/01-tsan/*)
 make wasm       # cross-compile via Emscripten → .build/wasm/wgsl_compiler.{js,wasm}
 make wasm-test  # Node smoke against the wasm bundle
@@ -123,24 +127,32 @@ libwgsl/
     types.c              TypeInfo + interner
     resolver.c           Name resolution
     consteval.c          Const evaluator
-    check.c              Type checker / overload resolver
-    validate.c           Validator
+    layout.c             Layout helpers
+    check/               Type checker / overload resolver
+    validate/            Validator passes
     glob.c · toml.c      Project preamble layer (no FS)
     project.c
     wgsl.c               Public-API plumbing
+  def/wgsl.def           Builtin overload source table
+  tools/                 Builtin generator and native CLI
   vendor/unicode/        Pre-built Unicode 17.0.0 tables
   tests/                 One executable per `tests/NN-name/test_*.c`
-  examples/shaders/      Real-world ML shaders used by the corpus tests
+  examples/              Small smoke/embedder examples
   docs/                  PLAN, DESIGN, BENCH, SPEC-MAP, SPEC-GAPS, …
 ```
 
 ## Status
 
-Phase 10 closed; the public API surface is locked at `include/wgsl.h`
-v0.2.  The corpus (17 ML / transformer shaders, 2 971 LOC, 45 433
-tokens, 291 top-level decls, 54 functions) parses zero-error and runs
-clean through every shipped pass.  `docs/PLAN.md` tracks what's done,
-what's next, and where every sub-project sits.
+The public API surface is in `include/wgsl.h` v0.2.0.  Current local
+verification in the development tree:
+
+- `make test`: 36 / 36 passed
+- WebGPU CTS WGSL shader-module validation: 565,599 / 565,599 compile
+  cases matched
+
+This repository intentionally carries the core C library, native CLI,
+examples, and tests.  Product surfaces such as the browser sandbox and
+editor extension are kept out of this package.
 
 ## License
 

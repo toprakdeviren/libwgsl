@@ -56,9 +56,112 @@ typedef enum {
 
     /* Internal / Synthetic types. */
     WGSL_TYPE_ATOMIC_CX_RESULT, /* ref = element type                     */
+    WGSL_TYPE_FREXP_RESULT,     /* ref = element type (T = f / vecN<f>)   */
+    WGSL_TYPE_MODF_RESULT,      /* ref = element type (T = f / vecN<f>)   */
+
+    /* Opaque handle types (§6.5). */
+    WGSL_TYPE_SAMPLER,    /* width = 0 normal, 1 comparison               */
+    WGSL_TYPE_TEXTURE,    /* width      = WGSLTextureDim                  */
+                          /* rows       = WGSLAccessMode (storage only)   */
+                          /* array_len  = WGSLTexelFormat (storage only)  */
+                          /* ref        = sampled element type            */
+                          /*              (NULL for depth/external/storage)*/
+
+    /* Memory views (§6.4) */
+    WGSL_TYPE_PTR,        /* ref = element, flags = addr_space | access<<8*/
+    WGSL_TYPE_REF,        /* ref = element, flags = addr_space | access<<8*/
 
     WGSL_TYPE_KIND_COUNT,
 } WGSLTypeKind;
+
+/* §6.5 texture flavours.  Encodes dimensionality + kind in one slot so
+ * the interner's (kind,width,rows,array_len,ref) key suffices.        */
+typedef enum {
+    WGSL_TEX_DIM_1D = 0,
+    WGSL_TEX_DIM_2D,
+    WGSL_TEX_DIM_2D_ARRAY,
+    WGSL_TEX_DIM_3D,
+    WGSL_TEX_DIM_CUBE,
+    WGSL_TEX_DIM_CUBE_ARRAY,
+    WGSL_TEX_DIM_MULTISAMPLED_2D,
+    WGSL_TEX_DIM_EXTERNAL,
+    /* Depth. */
+    WGSL_TEX_DIM_DEPTH_2D,
+    WGSL_TEX_DIM_DEPTH_2D_ARRAY,
+    WGSL_TEX_DIM_DEPTH_CUBE,
+    WGSL_TEX_DIM_DEPTH_CUBE_ARRAY,
+    WGSL_TEX_DIM_DEPTH_MULTISAMPLED_2D,
+    /* Storage. */
+    WGSL_TEX_DIM_STORAGE_1D,
+    WGSL_TEX_DIM_STORAGE_2D,
+    WGSL_TEX_DIM_STORAGE_2D_ARRAY,
+    WGSL_TEX_DIM_STORAGE_3D,
+} WGSLTextureDim;
+
+/* §6.5.10 — WGSL texel formats for storage textures.  Order matters
+ * only for the format-name lookup table in resolver.c. */
+typedef enum {
+    WGSL_TEX_FORMAT_NONE = 0,
+    /* 8-bit components. */
+    WGSL_TEX_FORMAT_R8UNORM,
+    WGSL_TEX_FORMAT_R8SNORM,
+    WGSL_TEX_FORMAT_R8UINT,
+    WGSL_TEX_FORMAT_R8SINT,
+    /* 16-bit components. */
+    WGSL_TEX_FORMAT_R16UINT,
+    WGSL_TEX_FORMAT_R16SINT,
+    WGSL_TEX_FORMAT_R16FLOAT,
+    WGSL_TEX_FORMAT_RG8UNORM,
+    WGSL_TEX_FORMAT_RG8SNORM,
+    WGSL_TEX_FORMAT_RG8UINT,
+    WGSL_TEX_FORMAT_RG8SINT,
+    /* 32-bit components (and similar total sizes). */
+    WGSL_TEX_FORMAT_R32UINT,
+    WGSL_TEX_FORMAT_R32SINT,
+    WGSL_TEX_FORMAT_R32FLOAT,
+    WGSL_TEX_FORMAT_RG16UINT,
+    WGSL_TEX_FORMAT_RG16SINT,
+    WGSL_TEX_FORMAT_RG16FLOAT,
+    WGSL_TEX_FORMAT_RGBA8UNORM,
+    WGSL_TEX_FORMAT_RGBA8UNORM_SRGB,
+    WGSL_TEX_FORMAT_RGBA8SNORM,
+    WGSL_TEX_FORMAT_RGBA8UINT,
+    WGSL_TEX_FORMAT_RGBA8SINT,
+    WGSL_TEX_FORMAT_BGRA8UNORM,
+    WGSL_TEX_FORMAT_BGRA8UNORM_SRGB,
+    WGSL_TEX_FORMAT_RGB10A2UNORM,
+    WGSL_TEX_FORMAT_RG11B10FLOAT,
+    /* 64-bit components. */
+    WGSL_TEX_FORMAT_RG32UINT,
+    WGSL_TEX_FORMAT_RG32SINT,
+    WGSL_TEX_FORMAT_RG32FLOAT,
+    WGSL_TEX_FORMAT_RGBA16UINT,
+    WGSL_TEX_FORMAT_RGBA16SINT,
+    WGSL_TEX_FORMAT_RGBA16FLOAT,
+    /* 128-bit components. */
+    WGSL_TEX_FORMAT_RGBA32UINT,
+    WGSL_TEX_FORMAT_RGBA32SINT,
+    WGSL_TEX_FORMAT_RGBA32FLOAT,
+    /* texture_formats_tier1 extras (§6.5.10). */
+    WGSL_TEX_FORMAT_R16UNORM,
+    WGSL_TEX_FORMAT_R16SNORM,
+    WGSL_TEX_FORMAT_RG16UNORM,
+    WGSL_TEX_FORMAT_RG16SNORM,
+    WGSL_TEX_FORMAT_RGBA16UNORM,
+    WGSL_TEX_FORMAT_RGBA16SNORM,
+    WGSL_TEX_FORMAT_RGB10A2UINT,
+    WGSL_TEX_FORMAT_RG11B10UFLOAT,
+} WGSLTexelFormat;
+
+/* §13.3 access modes — also used as the second template arg on
+ * texture_storage_*.  The resolver's PREDECLARED_ACCESS_MODE
+ * symbols carry these values implicitly via name lookup. */
+typedef enum {
+    WGSL_ACCESS_NONE       = 0,
+    WGSL_ACCESS_READ       = 1,
+    WGSL_ACCESS_WRITE      = 2,
+    WGSL_ACCESS_READ_WRITE = 3,
+} WGSLAccessMode;
 
 typedef struct WGSLTypeInfo {
     uint16_t kind;        /* WGSLTypeKind                                 */
@@ -88,6 +191,11 @@ _Static_assert(_Alignof(WGSLTypeInfo) == 4,
 #endif
 _Static_assert(WGSL_TYPE_KIND_COUNT < (1u << 16),
     "WGSLTypeKind must fit in 16 bits.");
+
+typedef struct {
+    uint32_t size;
+    uint32_t align;
+} WGSLTypeLayout;
 
 typedef struct WGSLTypeStore {
     WGSLArena    *arena;        /* borrowed; not owned                     */
@@ -121,7 +229,36 @@ WGSLTypeInfo *wgsl_type_vec   (WGSLTypeStore *s, uint8_t width, WGSLTypeInfo *el
 WGSLTypeInfo *wgsl_type_mat   (WGSLTypeStore *s, uint8_t cols, uint8_t rows, WGSLTypeInfo *elem);
 WGSLTypeInfo *wgsl_type_atomic(WGSLTypeStore *s, WGSLTypeInfo *elem);
 WGSLTypeInfo *wgsl_type_atomic_cx_result(WGSLTypeStore *s, WGSLTypeInfo *elem);
+WGSLTypeInfo *wgsl_type_frexp_result(WGSLTypeStore *s, WGSLTypeInfo *elem);
+WGSLTypeInfo *wgsl_type_modf_result (WGSLTypeStore *s, WGSLTypeInfo *elem);
 WGSLTypeInfo *wgsl_type_array (WGSLTypeStore *s, WGSLTypeInfo *elem, uint32_t length);
+
+/* §6.2.9 array equality — override-sized arrays.
+ *
+ * Two override-sized arrays compare equal only when their override
+ * symbols match.  The interner keeps `ref` as the element type and
+ * stores the override symbol pointer split across `flags` and `pad_`,
+ * preserving full pointer identity without growing `WGSLTypeInfo`.
+ * Pointer-equality on the resulting `WGSLTypeInfo *` then matches the
+ * spec's identifier-equality requirement. */
+WGSLTypeInfo *wgsl_type_array_override(
+    WGSLTypeStore *s, WGSLTypeInfo *elem, const void *override_sym);
+
+/* Opaque handle types (§6.5).  Interned by shape so identity-equality
+ * works.  `sampled_elem` is the texture's sampled type (i32/u32/f32)
+ * for sampled / multisampled flavours, and NULL for depth / external /
+ * storage textures.  `format` and `access` are NONE for non-storage. */
+WGSLTypeInfo *wgsl_type_sampler(WGSLTypeStore *s, int comparison);
+WGSLTypeInfo *wgsl_type_texture(
+    WGSLTypeStore *s,
+    WGSLTextureDim dim,
+    WGSLTypeInfo  *sampled_elem,
+    WGSLTexelFormat format,
+    WGSLAccessMode  access);
+
+/* Memory views (§6.4). `flags` packs AddressSpace in bottom 8 bits, AccessMode in next 8. */
+WGSLTypeInfo *wgsl_type_ptr(WGSLTypeStore *s, uint8_t as, WGSLTypeInfo *elem, WGSLAccessMode am);
+WGSLTypeInfo *wgsl_type_ref(WGSLTypeStore *s, uint8_t as, WGSLTypeInfo *elem, WGSLAccessMode am);
 
 /* — Predicates — */
 
@@ -133,6 +270,63 @@ int wgsl_type_is_abstract(const WGSLTypeInfo *t);
 int wgsl_type_is_concrete(const WGSLTypeInfo *t);
 int wgsl_type_is_vector  (const WGSLTypeInfo *t);
 int wgsl_type_is_matrix  (const WGSLTypeInfo *t);
+int wgsl_type_is_plain   (const WGSLTypeInfo *t);
+int wgsl_type_contains_atomic(const WGSLTypeInfo *t);
+
+/* §6.2.11 — composite NestDepth.
+ *
+ * vec=1, mat=2, array<E>=1+NestDepth(E), struct=1+max(member NestDepth).
+ * Returns 0 for non-composite types.  Struct members are NOT walked
+ * here — types.c doesn't have access to the type-checker's per-node
+ * type side-table; the deep walk lives in check.c.  As a lower bound
+ * for struct, this returns 1 (every WGSL struct has ≥1 member). */
+int wgsl_type_nest_depth(const WGSLTypeInfo *t);
+
+/* §6.2.12 — Constructible.
+ *
+ * scalar | vec | mat | fixed-size array (const-expr length) of
+ * constructible | struct of constructible.  Excludes atomic,
+ * runtime-sized array, and composites containing them.  Struct
+ * members are NOT walked here (same reason as nest_depth); the
+ * shallow predicate returns 1 for struct kinds and the deep walk
+ * happens in check.c via `wgsl_typecheck_is_constructible`. */
+int wgsl_type_is_constructible(const WGSLTypeInfo *t);
+
+/* §6.2.13 — Generation-fixed footprint.
+ *
+ * scalar | vec | mat | atomic | fixed-size array (const-expr length)
+ * Generation-fixed footprint OR fixed-size array (override-sized variant
+ * counts here even though it doesn't have GFF).  v1 can't yet
+ * distinguish override-sized from runtime-sized arrays in the type
+ * info (§6.2.9 identity-tracking gap), so this predicate currently
+ * coincides with GFF. */
+int wgsl_type_has_generation_fixed_footprint(const WGSLTypeInfo *t);
+
+/* §6.2.13 — Fixed footprint.
+ *
+ * Generation-fixed footprint OR fixed-size array (override-sized variant
+ * counts here even though it doesn't have GFF).  v1 can't yet
+ * distinguish override-sized from runtime-sized arrays in the type
+ * info (§6.2.9 identity-tracking gap), so this predicate currently
+ * coincides with GFF. */
+int wgsl_type_has_fixed_footprint(const WGSLTypeInfo *t);
+
+/* §6.4.1 — Storable.
+ *
+ * Plain types that fit in a memory location: scalar / vec / mat /
+ * atomic / array / struct.  Excludes opaque kinds (texture, sampler,
+ * ptr, ref). */
+int wgsl_type_is_storable(const WGSLTypeInfo *t);
+
+/* §6.4.2 — Host-shareable.
+ *
+ * Concrete-numeric scalar (i32 / u32 / f32 / f16) | vec of host-
+ * shareable scalar | mat (f32/f16 element) | atomic | array of host-
+ * shareable | struct of host-shareable.  Excludes `bool` and any type
+ * containing it.  The spec deep-walk for structs is shallow here
+ * (returns 1 for struct kinds); a struct-aware deep version lives in
+ * check.c when the validator needs it. */
+int wgsl_type_is_host_shareable(const WGSLTypeInfo *t);
 
 /* — Conversion rank (WGSL §6.1.2).  Returns -1 if no conversion. — */
 int wgsl_type_conversion_rank(const WGSLTypeInfo *src, const WGSLTypeInfo *dst);
@@ -147,6 +341,9 @@ int wgsl_type_conversion_rank(const WGSLTypeInfo *src, const WGSLTypeInfo *dst);
  *   already-concrete → returns `t`
  */
 WGSLTypeInfo *wgsl_type_concretize(WGSLTypeStore *s, WGSLTypeInfo *t);
+
+/** Compute the size and alignment of `t` per WGSL §14.4. */
+WGSLTypeLayout wgsl_type_get_layout(const WGSLTypeInfo *t);
 
 /* — Stringify — */
 

@@ -42,6 +42,7 @@ typedef struct {
     WGSLDiagBag      *diag;
 
     int               had_error;
+    int               has_seen_decl;
 } P;
 
 typedef struct {
@@ -55,7 +56,9 @@ static void nl_destroy(NL *nl) { free(nl->items); nl->items = NULL; nl->count = 
 static int  nl_push(NL *nl, WGSLNode *n) {
     if (!n) return 0;
     if (nl->count == nl->capacity) {
+        if (nl->capacity > SIZE_MAX / 2) return 0;
         size_t cap = nl->capacity ? nl->capacity * 2 : 8;
+        if (cap > SIZE_MAX / sizeof(WGSLNode *)) return 0;
         WGSLNode **g = (WGSLNode **)realloc(nl->items, cap * sizeof(*g));
         if (!g) return 0;
         nl->items = g;
@@ -105,8 +108,16 @@ static void parse_error(P *p, uint32_t off, uint32_t len, const char *fmt, ...) 
 static const WGSLToken *expect(P *p, WGSLTokenKind k, const char *what) {
     if (at(p, k)) return advance(p);
     const WGSLToken *got = peek(p);
-    parse_error(p, got->span.offset, got->span.length,
-                "expected %s, got %s", what, wgsl_token_kind_name(got->kind));
+    if (got->kind == WGSL_TOK_RESERVED) {
+        uint32_t off = got->span.offset;
+        uint32_t len = got->span.length;
+        parse_error(p, off, len,
+                    "'%.*s' is a reserved word and cannot be used in WGSL",
+                    (int)len, p->src->bytes + off);
+    } else {
+        parse_error(p, got->span.offset, got->span.length,
+                    "expected %s, got %s", what, wgsl_token_kind_name(got->kind));
+    }
     return got;
 }
 
@@ -147,7 +158,9 @@ static int finalize_children(P *p, WGSLNode *parent, NL *list) {
         p->had_error = 1;
         return 0;
     }
-    memcpy(arr, list->items, list->count * sizeof(WGSLNode *));
+    if (list->items) {
+        memcpy(arr, list->items, list->count * sizeof(WGSLNode *));
+    }
     parent->children    = arr;
     parent->child_count = (uint32_t)list->count;
     return 1;
@@ -162,6 +175,90 @@ static WGSLNode *parse_unary(P *p);
 static WGSLNode *parse_postfix(P *p, WGSLNode *base);
 static WGSLNode *parse_template_arg_list(P *p, WGSLNode *ident);
 static WGSLNode *parse_type_specifier(P *p);
+
+typedef enum {
+    BIN_GROUP_NONE      = 0,
+    BIN_GROUP_MUL       = 1u << 0,
+    BIN_GROUP_ADD       = 1u << 1,
+    BIN_GROUP_SHIFT     = 1u << 2,
+    BIN_GROUP_REL       = 1u << 3,
+    BIN_GROUP_BIT_AND   = 1u << 4,
+    BIN_GROUP_BIT_XOR   = 1u << 5,
+    BIN_GROUP_BIT_OR    = 1u << 6,
+    BIN_GROUP_LOGICAL   = 1u << 7,
+} BinaryOpGroup;
+
+static BinaryOpGroup binary_group(WGSLTokenKind k) {
+    switch (k) {
+    case WGSL_TOK_STAR:
+    case WGSL_TOK_SLASH:
+    case WGSL_TOK_PERCENT:
+        return BIN_GROUP_MUL;
+    case WGSL_TOK_PLUS:
+    case WGSL_TOK_MINUS:
+        return BIN_GROUP_ADD;
+    case WGSL_TOK_LESS_LESS:
+    case WGSL_TOK_GREATER_GREATER:
+        return BIN_GROUP_SHIFT;
+    case WGSL_TOK_LESS:
+    case WGSL_TOK_LESS_EQUAL:
+    case WGSL_TOK_GREATER:
+    case WGSL_TOK_GREATER_EQUAL:
+    case WGSL_TOK_EQUAL_EQUAL:
+    case WGSL_TOK_BANG_EQUAL:
+        return BIN_GROUP_REL;
+    case WGSL_TOK_AMP:
+        return BIN_GROUP_BIT_AND;
+    case WGSL_TOK_CARET:
+        return BIN_GROUP_BIT_XOR;
+    case WGSL_TOK_PIPE:
+        return BIN_GROUP_BIT_OR;
+    case WGSL_TOK_AMP_AMP:
+    case WGSL_TOK_PIPE_PIPE:
+        return BIN_GROUP_LOGICAL;
+    default:
+        return BIN_GROUP_NONE;
+    }
+}
+
+static uint32_t can_precede_groups(BinaryOpGroup g) {
+    switch (g) {
+    case BIN_GROUP_MUL:
+        return BIN_GROUP_MUL | BIN_GROUP_ADD | BIN_GROUP_REL;
+    case BIN_GROUP_ADD:
+        return BIN_GROUP_MUL | BIN_GROUP_ADD | BIN_GROUP_REL;
+    case BIN_GROUP_SHIFT:
+        return BIN_GROUP_REL | BIN_GROUP_LOGICAL;
+    case BIN_GROUP_REL:
+        return BIN_GROUP_MUL | BIN_GROUP_ADD | BIN_GROUP_SHIFT |
+               BIN_GROUP_LOGICAL;
+    case BIN_GROUP_BIT_AND:
+        return BIN_GROUP_BIT_AND;
+    case BIN_GROUP_BIT_XOR:
+        return BIN_GROUP_BIT_XOR;
+    case BIN_GROUP_BIT_OR:
+        return BIN_GROUP_BIT_OR;
+    case BIN_GROUP_LOGICAL:
+        return BIN_GROUP_REL;
+    default:
+        return 0;
+    }
+}
+
+/* §8.18 — ordered binary operator pairs that require parentheses when
+ * written as `a prev b next c`. */
+static int requires_parens_ordered(WGSLTokenKind prev, WGSLTokenKind next) {
+    if ((prev == WGSL_TOK_AMP_AMP || prev == WGSL_TOK_PIPE_PIPE) &&
+        (next == WGSL_TOK_AMP_AMP || next == WGSL_TOK_PIPE_PIPE))
+    {
+        return prev != next;
+    }
+
+    BinaryOpGroup pg = binary_group(prev);
+    BinaryOpGroup ng = binary_group(next);
+    if (pg == BIN_GROUP_NONE || ng == BIN_GROUP_NONE) return 0;
+    return (can_precede_groups(pg) & (uint32_t)ng) == 0;
+}
 
 /* §8.19 abridged precedence table for Round A.  Higher = tighter.
  * Returns 0 for non-binary tokens. */
@@ -220,6 +317,30 @@ static WGSLNode *parse_binary_rhs(P *p, WGSLNode *lhs, int min_prec) {
         arr[0] = lhs; arr[1] = rhs;
         bin->children    = arr;
         bin->child_count = 2;
+
+        /* §8.18 — flag operator pairs that are mixed without parens.
+         * EXPR_PAREN around either operand suppresses the diagnostic
+         * (the user disambiguated). */
+        if (lhs->kind == WGSL_NODE_EXPR_BINARY) {
+            WGSLTokenKind inner = (WGSLTokenKind)lhs->payload[0];
+            if (requires_parens_ordered(inner, op_kind)) {
+                parse_error(p, op_span.offset, op_span.length,
+                    "operator '%s' requires parentheses when mixed with '%s' "
+                    "(spec §8.18: no relative precedence)",
+                    wgsl_token_kind_name(op_kind),
+                    wgsl_token_kind_name(inner));
+            }
+        }
+        if (rhs->kind == WGSL_NODE_EXPR_BINARY) {
+            WGSLTokenKind inner = (WGSLTokenKind)rhs->payload[0];
+            if (requires_parens_ordered(op_kind, inner)) {
+                parse_error(p, op_span.offset, op_span.length,
+                    "operator '%s' requires parentheses when mixed with '%s' "
+                    "(spec §8.18: no relative precedence)",
+                    wgsl_token_kind_name(op_kind),
+                    wgsl_token_kind_name(inner));
+            }
+        }
 
         lhs = bin;
     }
@@ -452,11 +573,12 @@ static WGSLNode *parse_type_specifier(P *p) {
 
 static WGSLNode *parse_attribute(P *p) {
     const WGSLToken *at_tok = expect(p, WGSL_TOK_AT, "'@'");
-    /* Attribute names are context-dependent; lexer emits them as IDENT. */
-    if (!at(p, WGSL_TOK_IDENT)) {
-        const WGSLToken *t = peek(p);
+    const WGSLToken *t = peek(p);
+    int is_ident_like = (t->kind == WGSL_TOK_IDENT) ||
+                        (t->kind >= WGSL_TOK_KW_ALIAS && t->kind <= WGSL_TOK_KW_WHILE);
+    if (!is_ident_like) {
         parse_error(p, t->span.offset, t->span.length,
-                    "expected attribute name, got %s",
+                    "expected attribute name (identifier or keyword), got %s",
                     wgsl_token_kind_name(t->kind));
         return make_node(p, WGSL_NODE_INVALID, at_tok->span);
     }
@@ -471,7 +593,9 @@ static WGSLNode *parse_attribute(P *p) {
     }
 
     uint32_t end = name->span.offset + name->span.length;
+    int has_parens = 0;
     if (match(p, WGSL_TOK_LPAREN)) {
+        has_parens = 1;
         if (!at(p, WGSL_TOK_RPAREN)) {
             do {
                 if (at(p, WGSL_TOK_RPAREN)) break;
@@ -491,6 +615,7 @@ static WGSLNode *parse_attribute(P *p) {
     WGSLSpan span = wgsl_span_make(at_tok->span.offset, end - at_tok->span.offset);
     WGSLNode *node = make_node(p, WGSL_NODE_ATTRIBUTE, span);
     if (!node) { nl_destroy(&kids); return NULL; }
+    if (has_parens) node->flags |= WGSL_FLAG_ATTR_PARENS;
     finalize_children(p, node, &kids);
     nl_destroy(&kids);
     return node;
@@ -502,6 +627,47 @@ static int parse_attributes(P *p, NL *out) {
         if (a) nl_push(out, a);
     }
     return 1;
+}
+
+static int attach_statement_attrs(P *p, WGSLNode *node, const NL *attrs) {
+    if (!p || !node || !attrs || attrs->count == 0) return 1;
+    uint32_t existing_count = (uint32_t)(node->payload[1] & 0xFFFFFFFFu);
+    WGSLNode **existing = (WGSLNode **)(uintptr_t)node->payload[2];
+    if (attrs->count > UINT32_MAX - existing_count) return 0;
+    uint32_t total = existing_count + (uint32_t)attrs->count;
+    WGSLNode **items = (WGSLNode **)wgsl_arena_alloc(
+        p->arena, (size_t)total * sizeof *items);
+    if (!items) return 0;
+    for (uint32_t i = 0; i < existing_count; i++) {
+        items[i] = existing ? existing[i] : NULL;
+    }
+    for (size_t i = 0; i < attrs->count; i++) {
+        items[existing_count + (uint32_t)i] = attrs->items[i];
+    }
+    node->payload[1] = (node->payload[1] & 0xFFFFFFFF00000000ull) | (uint64_t)total;
+    node->payload[2] = (uint64_t)(uintptr_t)items;
+    node->flags |= WGSL_FLAG_HAS_ATTRS;
+
+    uint32_t start = node->span_offset;
+    for (size_t i = 0; i < attrs->count; i++) {
+        WGSLNode *a = attrs->items[i];
+        if (a && a->span_offset < start) start = a->span_offset;
+    }
+    if (start < node->span_offset) {
+        node->span_length += node->span_offset - start;
+        node->span_offset = start;
+    }
+    return 1;
+}
+
+static int stmt_kind_accepts_attrs(WGSLNodeKind k) {
+    return k == WGSL_NODE_STMT_COMPOUND ||
+           k == WGSL_NODE_STMT_IF ||
+           k == WGSL_NODE_STMT_WHILE ||
+           k == WGSL_NODE_STMT_FOR ||
+           k == WGSL_NODE_STMT_LOOP ||
+           k == WGSL_NODE_STMT_CONTINUING ||
+           k == WGSL_NODE_STMT_SWITCH;
 }
 
 /* ── Statements ─────────────────────────────────────────────────── */
@@ -516,6 +682,8 @@ static WGSLNode *parse_compound_statement(P *p) {
         WGSLNode *s = parse_statement(p);
         if (s && s->kind != WGSL_NODE_INVALID) {
             nl_push(&kids, s);
+        } else if (s && s->span_offset == 0 && s->span_length == 0) {
+            continue;
         } else {
             recover_to_sync(p);
         }
@@ -529,6 +697,28 @@ static WGSLNode *parse_compound_statement(P *p) {
     if (node) finalize_children(p, node, &kids);
     nl_destroy(&kids);
     return node;
+}
+
+static void parse_discard_attributes(P *p) {
+    if (!at(p, WGSL_TOK_AT)) return;
+    NL discard; nl_init(&discard);
+    parse_attributes(p, &discard);
+    nl_destroy(&discard);
+}
+
+static WGSLNode *parse_attributed_compound_statement(P *p) {
+    NL attrs; nl_init(&attrs);
+    parse_attributes(p, &attrs);
+    WGSLNode *body = parse_compound_statement(p);
+    attach_statement_attrs(p, body, &attrs);
+    nl_destroy(&attrs);
+    return body;
+}
+
+static const WGSLToken *expect_attributed_lbrace(P *p, const char *label, NL *attrs) {
+    if (attrs) parse_attributes(p, attrs);
+    else       parse_discard_attributes(p);
+    return expect(p, WGSL_TOK_LBRACE, label);
 }
 
 /* Helper: optionally consume `;` and compute the right span end.
@@ -824,7 +1014,7 @@ static WGSLNode *parse_default_statement(P *p, int as_statement) {
 static WGSLNode *parse_if_statement(P *p) {
     const WGSLToken *kw = expect(p, WGSL_TOK_KW_IF, "'if'");
     WGSLNode *cond  = parse_expression(p);
-    WGSLNode *then_ = parse_compound_statement(p);
+    WGSLNode *then_ = parse_attributed_compound_statement(p);
 
     NL kids; nl_init(&kids);
     if (cond)  nl_push(&kids, cond);
@@ -835,7 +1025,7 @@ static WGSLNode *parse_if_statement(P *p) {
         if (at(p, WGSL_TOK_KW_IF)) {
             advance(p);
             WGSLNode *ec = parse_expression(p);
-            WGSLNode *eb = parse_compound_statement(p);
+            WGSLNode *eb = parse_attributed_compound_statement(p);
             uint32_t end = eb ? eb->span_offset + eb->span_length
                               : else_kw->span.offset + else_kw->span.length;
             WGSLSpan espan = wgsl_span_make(else_kw->span.offset, end - else_kw->span.offset);
@@ -849,7 +1039,7 @@ static WGSLNode *parse_if_statement(P *p) {
                 nl_push(&kids, enode);
             }
         } else {
-            WGSLNode *eb = parse_compound_statement(p);
+            WGSLNode *eb = parse_attributed_compound_statement(p);
             uint32_t end = eb ? eb->span_offset + eb->span_length
                               : else_kw->span.offset + else_kw->span.length;
             WGSLSpan espan = wgsl_span_make(else_kw->span.offset, end - else_kw->span.offset);
@@ -879,7 +1069,7 @@ static WGSLNode *parse_if_statement(P *p) {
 static WGSLNode *parse_while_statement(P *p) {
     const WGSLToken *kw = expect(p, WGSL_TOK_KW_WHILE, "'while'");
     WGSLNode *cond = parse_expression(p);
-    WGSLNode *body = parse_compound_statement(p);
+    WGSLNode *body = parse_attributed_compound_statement(p);
 
     uint32_t end = body ? body->span_offset + body->span_length
                         : kw->span.offset + kw->span.length;
@@ -905,7 +1095,7 @@ static WGSLNode *parse_for_init_or_update(P *p) {
     WGSLTokenKind k = peek(p)->kind;
     if (k == WGSL_TOK_KW_LET)          return parse_let_decl(p, /*as_statement=*/0);
     if (k == WGSL_TOK_KW_VAR)          return parse_var_decl(p, /*as_statement=*/0,
-                                                              /*allow_template=*/0,
+                                                              /*allow_template=*/1,
                                                               /*attrs=*/NULL);
     if (k == WGSL_TOK_KW_CONST)        return parse_const_decl(p, /*as_statement=*/0);
     return parse_default_statement(p, /*as_statement=*/0);
@@ -936,7 +1126,7 @@ static WGSLNode *parse_for_statement(P *p) {
     }
     expect(p, WGSL_TOK_RPAREN, "')'");
 
-    WGSLNode *body = parse_compound_statement(p);
+    WGSLNode *body = parse_attributed_compound_statement(p);
     if (body) nl_push(&kids, body);
 
     uint32_t end = body ? body->span_offset + body->span_length
@@ -953,7 +1143,8 @@ static WGSLNode *parse_for_statement(P *p) {
 
 static WGSLNode *parse_loop_statement(P *p) {
     const WGSLToken *kw = expect(p, WGSL_TOK_KW_LOOP, "'loop'");
-    expect(p, WGSL_TOK_LBRACE, "'{'");
+    NL attrs; nl_init(&attrs);
+    expect_attributed_lbrace(p, "'{'", &attrs);
 
     NL kids; nl_init(&kids);
     while (!at(p, WGSL_TOK_RBRACE) && !at(p, WGSL_TOK_EOF)) {
@@ -964,7 +1155,11 @@ static WGSLNode *parse_loop_statement(P *p) {
         }
         WGSLNode *s = parse_statement(p);
         if (s && s->kind != WGSL_NODE_INVALID) nl_push(&kids, s);
-        else recover_to_sync(p);
+        else if (s && s->span_offset == 0 && s->span_length == 0) {
+            continue;
+        } else {
+            recover_to_sync(p);
+        }
     }
     const WGSLToken *close = peek(p);
     expect(p, WGSL_TOK_RBRACE, "'}'");
@@ -972,14 +1167,19 @@ static WGSLNode *parse_loop_statement(P *p) {
     WGSLSpan span = wgsl_span_make(
         kw->span.offset, close->span.offset + close->span.length - kw->span.offset);
     WGSLNode *node = make_node(p, WGSL_NODE_STMT_LOOP, span);
-    if (node) finalize_children(p, node, &kids);
+    if (node) {
+        finalize_children(p, node, &kids);
+        attach_statement_attrs(p, node, &attrs);
+    }
+    nl_destroy(&attrs);
     nl_destroy(&kids);
     return node;
 }
 
 static WGSLNode *parse_continuing_statement(P *p) {
     const WGSLToken *kw = expect(p, WGSL_TOK_KW_CONTINUING, "'continuing'");
-    expect(p, WGSL_TOK_LBRACE, "'{'");
+    NL attrs; nl_init(&attrs);
+    expect_attributed_lbrace(p, "'{'", &attrs);
 
     NL kids; nl_init(&kids);
     while (!at(p, WGSL_TOK_RBRACE) && !at(p, WGSL_TOK_EOF)) {
@@ -1002,7 +1202,11 @@ static WGSLNode *parse_continuing_statement(P *p) {
         }
         WGSLNode *s = parse_statement(p);
         if (s && s->kind != WGSL_NODE_INVALID) nl_push(&kids, s);
-        else recover_to_sync(p);
+        else if (s && s->span_offset == 0 && s->span_length == 0) {
+            continue;
+        } else {
+            recover_to_sync(p);
+        }
     }
     const WGSLToken *close = peek(p);
     expect(p, WGSL_TOK_RBRACE, "'}'");
@@ -1010,7 +1214,11 @@ static WGSLNode *parse_continuing_statement(P *p) {
     WGSLSpan span = wgsl_span_make(
         kw->span.offset, close->span.offset + close->span.length - kw->span.offset);
     WGSLNode *node = make_node(p, WGSL_NODE_STMT_CONTINUING, span);
-    if (node) finalize_children(p, node, &kids);
+    if (node) {
+        finalize_children(p, node, &kids);
+        attach_statement_attrs(p, node, &attrs);
+    }
+    nl_destroy(&attrs);
     nl_destroy(&kids);
     return node;
 }
@@ -1055,7 +1263,7 @@ static WGSLNode *parse_case_clause(P *p) {
     if (k == WGSL_TOK_KW_DEFAULT) {
         const WGSLToken *kw = advance(p);
         match(p, WGSL_TOK_COLON);
-        WGSLNode *body = parse_compound_statement(p);
+        WGSLNode *body = parse_attributed_compound_statement(p);
         uint32_t end = body ? body->span_offset + body->span_length
                             : kw->span.offset + kw->span.length;
         WGSLSpan span = wgsl_span_make(kw->span.offset, end - kw->span.offset);
@@ -1070,32 +1278,52 @@ static WGSLNode *parse_case_clause(P *p) {
         return node;
     }
 
-    /* `case` selectors */
+    /* `case` selectors — per spec §18 / §9.4.2, the list may include
+     * the `default` keyword as one of its selectors (e.g.
+     * `case 0, default, 2:`).  Accept that shape and record it via
+     * a separate bit so the validator can count default occurrences. */
     const WGSLToken *kw = expect(p, WGSL_TOK_KW_CASE, "'case' or 'default'");
     NL sels; nl_init(&sels);
+    int has_default_in_list = 0;
+    int default_count_in_list = 0;
+    const WGSLToken *first_extra_default = NULL;
     do {
         if (at(p, WGSL_TOK_COLON) || at(p, WGSL_TOK_LBRACE)) break;
         if (at(p, WGSL_TOK_KW_DEFAULT)) {
-            const WGSLToken *t = peek(p);
-            parse_error(p, t->span.offset, t->span.length,
-                        "Round B does not support `default` mid-case-list — "
-                        "use a separate `default` clause");
-            advance(p);
+            const WGSLToken *dtok = advance(p);
+            default_count_in_list += 1;
+            if (default_count_in_list == 2) first_extra_default = dtok;
+            has_default_in_list = 1;
         } else {
             WGSLNode *e = parse_expression(p);
             if (e) nl_push(&sels, e);
         }
     } while (match(p, WGSL_TOK_COMMA));
+    /* §9.4.2 — `default` must not appear more than once in a single
+     * case selector list (`case 0, default, default, 2:` is invalid).
+     * The "more than one default clause overall" check happens later
+     * in the typechecker; this gate is the per-list version. */
+    if (default_count_in_list > 1 && first_extra_default) {
+        parse_error(p,
+            first_extra_default->span.offset,
+            first_extra_default->span.length,
+            "'default' must not appear more than once in the same case "
+            "selector list");
+    }
 
     match(p, WGSL_TOK_COLON);
-    WGSLNode *body = parse_compound_statement(p);
+    WGSLNode *body = parse_attributed_compound_statement(p);
 
     uint32_t end = body ? body->span_offset + body->span_length
                         : kw->span.offset + kw->span.length;
     WGSLSpan span = wgsl_span_make(kw->span.offset, end - kw->span.offset);
     WGSLNode *node = make_node(p, WGSL_NODE_STMT_CASE_CLAUSE, span);
     if (node) {
-        node->payload[0] = (uint64_t)sels.count;
+        /* payload[0]: low32 = selector_count;
+         *             bit 32 = is_default_alone (standalone `default:`);
+         *             bit 33 = has_default_in_list (`case X, default, …`). */
+        node->payload[0] = (uint64_t)sels.count |
+                           ((uint64_t)has_default_in_list << 33);
         NL kids; nl_init(&kids);
         for (size_t i = 0; i < sels.count; i++) nl_push(&kids, sels.items[i]);
         if (body) nl_push(&kids, body);
@@ -1109,7 +1337,8 @@ static WGSLNode *parse_case_clause(P *p) {
 static WGSLNode *parse_switch_statement(P *p) {
     const WGSLToken *kw = expect(p, WGSL_TOK_KW_SWITCH, "'switch'");
     WGSLNode *selector = parse_expression(p);
-    expect(p, WGSL_TOK_LBRACE, "'{' (switch body)");
+    NL attrs; nl_init(&attrs);
+    expect_attributed_lbrace(p, "'{' (switch body)", &attrs);
 
     NL kids; nl_init(&kids);
     if (selector) nl_push(&kids, selector);
@@ -1125,34 +1354,67 @@ static WGSLNode *parse_switch_statement(P *p) {
     WGSLSpan span = wgsl_span_make(
         kw->span.offset, close->span.offset + close->span.length - kw->span.offset);
     WGSLNode *node = make_node(p, WGSL_NODE_STMT_SWITCH, span);
-    if (node) finalize_children(p, node, &kids);
+    if (node) {
+        finalize_children(p, node, &kids);
+        attach_statement_attrs(p, node, &attrs);
+    }
+    nl_destroy(&attrs);
     nl_destroy(&kids);
     return node;
 }
 
 static WGSLNode *parse_statement(P *p) {
+    /* §18 grammar permits a leading attribute list on:
+     *   - compound_statement      (`attribute* '{' …`)
+     *   - if / loop / for / while (`attribute* 'if' …` etc.)
+     *   - switch                  (`attribute* 'switch' …`)
+     *
+     * The semantically meaningful one in this set is `@diagnostic(...)`
+     * — which adjusts the diag filter for the block.  The validator's
+     * scope-push already handles fn-level @diagnostic; stmt-level
+     * scope semantics are handled by the uniformity validator using
+     * the statement attribute payload attached below. */
+    NL attrs; nl_init(&attrs);
+    parse_attributes(p, &attrs);
     WGSLTokenKind k = peek(p)->kind;
+    WGSLNode *node = NULL;
     switch (k) {
-    case WGSL_TOK_LBRACE:           return parse_compound_statement(p);
-    case WGSL_TOK_KW_LET:           return parse_let_decl(p, 1);
-    case WGSL_TOK_KW_VAR:           return parse_var_decl(p, 1, 0, NULL);
-    case WGSL_TOK_KW_CONST:         return parse_const_decl(p, 1);
-    case WGSL_TOK_KW_CONST_ASSERT:  return parse_const_assert_statement(p);
-    case WGSL_TOK_KW_RETURN:        return parse_return_statement(p);
-    case WGSL_TOK_KW_IF:            return parse_if_statement(p);
-    case WGSL_TOK_KW_WHILE:         return parse_while_statement(p);
-    case WGSL_TOK_KW_FOR:           return parse_for_statement(p);
-    case WGSL_TOK_KW_LOOP:          return parse_loop_statement(p);
-    case WGSL_TOK_KW_SWITCH:        return parse_switch_statement(p);
-    case WGSL_TOK_KW_BREAK:         return parse_break_statement(p);
-    case WGSL_TOK_KW_CONTINUE:      return parse_continue_statement(p);
-    case WGSL_TOK_KW_DISCARD:       return parse_discard_statement(p);
+    case WGSL_TOK_LBRACE:           node = parse_compound_statement(p); break;
+    case WGSL_TOK_KW_LET:           node = parse_let_decl(p, 1); break;
+    /* §7.4 grammar: `variable_decl` accepts the template list at any
+     * scope.  Statement-level var still cannot carry attributes
+     * (`@group`/`@binding` are module-only), so `attrs_or_null=NULL`. */
+    case WGSL_TOK_KW_VAR:           node = parse_var_decl(p, 1, 1, NULL); break;
+    case WGSL_TOK_KW_CONST:         node = parse_const_decl(p, 1); break;
+    case WGSL_TOK_KW_CONST_ASSERT:  node = parse_const_assert_statement(p); break;
+    case WGSL_TOK_KW_RETURN:        node = parse_return_statement(p); break;
+    case WGSL_TOK_KW_IF:            node = parse_if_statement(p); break;
+    case WGSL_TOK_KW_WHILE:         node = parse_while_statement(p); break;
+    case WGSL_TOK_KW_FOR:           node = parse_for_statement(p); break;
+    case WGSL_TOK_KW_LOOP:          node = parse_loop_statement(p); break;
+    case WGSL_TOK_KW_SWITCH:        node = parse_switch_statement(p); break;
+    case WGSL_TOK_KW_BREAK:         node = parse_break_statement(p); break;
+    case WGSL_TOK_KW_CONTINUE:      node = parse_continue_statement(p); break;
+    case WGSL_TOK_KW_DISCARD:       node = parse_discard_statement(p); break;
     case WGSL_TOK_SEMICOLON:
         advance(p);
-        return make_node(p, WGSL_NODE_INVALID, wgsl_span_make(0, 0));
+        node = make_node(p, WGSL_NODE_INVALID, wgsl_span_make(0, 0));
+        break;
     default:
-        return parse_default_statement(p, /*as_statement=*/1);
+        node = parse_default_statement(p, /*as_statement=*/1);
+        break;
     }
+    if (node && node->kind != WGSL_NODE_INVALID &&
+        stmt_kind_accepts_attrs((WGSLNodeKind)node->kind))
+    {
+        attach_statement_attrs(p, node, &attrs);
+    } else if (attrs.count > 0) {
+        WGSLNode *first = attrs.items[0];
+        parse_error(p, first->span_offset, first->span_length,
+                    "attributes are not permitted on this statement");
+    }
+    nl_destroy(&attrs);
+    return node;
 }
 
 /* ── Decls ──────────────────────────────────────────────────────── */
@@ -1228,7 +1490,7 @@ static WGSLNode *parse_function_decl(P *p, NL *fn_attrs) {
     }
 
     /* body */
-    WGSLNode *body = parse_compound_statement(p);
+    WGSLNode *body = parse_attributed_compound_statement(p);
     if (body) nl_push(&kids, body);
 
     uint32_t start = fn_attr_count > 0 ? fn_attrs->items[0]->span_offset : kw->span.offset;
@@ -1251,6 +1513,7 @@ static WGSLNode *parse_function_decl(P *p, NL *fn_attrs) {
 
 /* Helper: build a child IDENT node for a token's span. */
 static WGSLNode *make_ident_from(P *p, const WGSLToken *t) {
+    if (!t) return NULL;
     WGSLNode *n = make_node(p, WGSL_NODE_EXPR_IDENT, t->span);
     if (n) n->payload[0] =
         ((uint64_t)t->span.offset) | ((uint64_t)t->span.length << 32);
@@ -1455,6 +1718,7 @@ static int parse_global_decl(P *p, NL *out) {
     int consumed_attrs = 0;
     int produced = 0;
 
+    WGSLSpan k_span = peek(p)->span;
     switch (k) {
     case WGSL_TOK_KW_FN:
         decl = parse_function_decl(p, &attrs);
@@ -1489,11 +1753,19 @@ static int parse_global_decl(P *p, NL *out) {
         break;
 
     case WGSL_TOK_KW_ENABLE:
+        if (p->has_seen_decl) {
+            parse_error(p, k_span.offset, k_span.length,
+                        "'enable' directive must appear before any declarations");
+        }
         decl = parse_ident_list_directive(
             p, WGSL_TOK_KW_ENABLE, "'enable'", WGSL_NODE_DIR_ENABLE);
         break;
 
     case WGSL_TOK_KW_REQUIRES:
+        if (p->has_seen_decl) {
+            parse_error(p, k_span.offset, k_span.length,
+                        "'requires' directive must appear before any declarations");
+        }
         decl = parse_ident_list_directive(
             p, WGSL_TOK_KW_REQUIRES, "'requires'", WGSL_NODE_DIR_REQUIRES);
         break;
@@ -1519,7 +1791,15 @@ static int parse_global_decl(P *p, NL *out) {
     }
     nl_destroy(&attrs);
 
-    if (decl) produced = nl_push(out, decl);
+    if (decl) {
+        if (decl->kind != WGSL_NODE_DIR_ENABLE &&
+            decl->kind != WGSL_NODE_DIR_REQUIRES &&
+            decl->kind != WGSL_NODE_DIR_DIAGNOSTIC)
+        {
+            p->has_seen_decl = 1;
+        }
+        produced = nl_push(out, decl);
+    }
     return produced;
 }
 
@@ -1533,6 +1813,7 @@ int wgsl_parse(
     WGSLAst             *out)
 {
     if (!tokens || !source || !arena || !diag || !out) return 0;
+    out->root = NULL;
 
     P p;
     memset(&p, 0, sizeof p);
@@ -1542,6 +1823,16 @@ int wgsl_parse(
     p.arena  = arena;
     p.diag   = diag;
 
+    if (!p.tokens || p.count == 0 ||
+        p.tokens[p.count - 1].kind != WGSL_TOK_EOF)
+    {
+        parse_error(&p, 0, 0, "internal lexer error: missing EOF token");
+        WGSLNode *tu = make_node(&p, WGSL_NODE_TRANSLATION_UNIT,
+                                 wgsl_span_make(0, (uint32_t)source->length));
+        out->root = tu;
+        return 0;
+    }
+
     WGSLNode *tu = make_node(&p, WGSL_NODE_TRANSLATION_UNIT,
                              wgsl_span_make(0, (uint32_t)source->length));
     if (!tu) return 0;
@@ -1549,6 +1840,18 @@ int wgsl_parse(
     NL list; nl_init(&list);
     while (!at(&p, WGSL_TOK_EOF)) {
         if (at(&p, WGSL_TOK_SEMICOLON)) { advance(&p); continue; }
+        /* Stray `}` at the top level: a malformed inner block has
+         * leaked its closer up here.  `parse_global_decl` would emit
+         * "expected top-level declaration" without advancing, and
+         * `recover_to_sync` stops at `}` — yielding an infinite loop.
+         * Consume the `}` here so the recovery makes progress. */
+        if (at(&p, WGSL_TOK_RBRACE)) {
+            const WGSLToken *t = peek(&p);
+            parse_error(&p, t->span.offset, t->span.length,
+                        "stray '}' at top level");
+            advance(&p);
+            continue;
+        }
         if (!parse_global_decl(&p, &list)) {
             recover_to_sync(&p);
         }

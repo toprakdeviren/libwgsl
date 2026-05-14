@@ -240,6 +240,37 @@ int main(void) {
            WGSL_TOK_EQUAL, WGSL_TOK_IDENT, WGSL_TOK_EOF),
         "vec<f32>=y (>= split)");
 
+    /* — 14b. `>>=` split closing TWO nested templates — §3.9                 *
+     *                                                                        *
+     * `array<vec<f32>>=x` — the lexer produces ident, `<`, ident, `<`,       *
+     * ident, `>>=`, ident.  Discovery must close BOTH pending templates      *
+     * with the leading `>>` and treat the trailing `=` as an assignment.     */
+    expect_seq("array<vec<f32>>=x",
+        E(WGSL_TOK_IDENT, WGSL_TOK_TEMPLATE_START,
+          WGSL_TOK_IDENT, WGSL_TOK_TEMPLATE_START,
+          WGSL_TOK_IDENT, WGSL_TOK_TEMPLATE_END,
+          WGSL_TOK_TEMPLATE_END, WGSL_TOK_EQUAL,
+          WGSL_TOK_IDENT, WGSL_TOK_EOF),
+        EN(WGSL_TOK_IDENT, WGSL_TOK_TEMPLATE_START,
+           WGSL_TOK_IDENT, WGSL_TOK_TEMPLATE_START,
+           WGSL_TOK_IDENT, WGSL_TOK_TEMPLATE_END,
+           WGSL_TOK_TEMPLATE_END, WGSL_TOK_EQUAL,
+           WGSL_TOK_IDENT, WGSL_TOK_EOF),
+        ">>= closes two pending templates then `=`");
+
+    /* — 14c. `>>=` with only ONE pending template stays a comparison — §3.9 *
+     *                                                                       *
+     * `a<b>>=c` (one pending) splits into TEMPLATE_END + GREATER_EQUAL.     *
+     * The trailing `>=` is a comparison, NOT an assignment.                  */
+    expect_seq("a<b>>=c",
+        E(WGSL_TOK_IDENT, WGSL_TOK_TEMPLATE_START,
+          WGSL_TOK_IDENT, WGSL_TOK_TEMPLATE_END,
+          WGSL_TOK_GREATER_EQUAL, WGSL_TOK_IDENT, WGSL_TOK_EOF),
+        EN(WGSL_TOK_IDENT, WGSL_TOK_TEMPLATE_START,
+           WGSL_TOK_IDENT, WGSL_TOK_TEMPLATE_END,
+           WGSL_TOK_GREATER_EQUAL, WGSL_TOK_IDENT, WGSL_TOK_EOF),
+        ">>= closes ONE pending then trailing `>=` stays comparison");
+
     /* — 15. Sanity: a complex line — */
     {
         Lex l; lex_run(&l,

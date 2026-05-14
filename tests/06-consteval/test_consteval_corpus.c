@@ -2,7 +2,7 @@
  * Phase 6 Iter C — const-evaluator across the real shader corpus.
  *
  * Mirrors the resolver's corpus harness (`test_resolver_corpus.c`):
- *   1. `00_shared.wgsl` is prepended to every kernel compilation.
+ *   1. `_shared.wgsl` is prepended to every kernel compilation.
  *   2. Each `.wgsl` is split at `// --- KERNEL: <name> ---` markers.
  *   3. For each kernel section: lex → parse → resolve → const-eval.
  *      Gate on every section completing with zero ERROR diagnostics.
@@ -207,14 +207,14 @@ int main(void) {
     wgsl_utf8_init();
 
     size_t shared_len = 0;
-    char *shared = slurp(SHADERS_DIR "/00_shared.wgsl", &shared_len);
+    char *shared = slurp(SHADERS_DIR "/_shared.wgsl", &shared_len);
     if (!shared) {
-        fprintf(stderr, "FAIL  cannot read %s/00_shared.wgsl\n", SHADERS_DIR);
+        fprintf(stderr, "FAIL  cannot read %s/_shared.wgsl\n", SHADERS_DIR);
         return 1;
     }
 
     FileStats shared_stats = {0};
-    run_file("00_shared.wgsl", "", 0, shared, shared_len, &shared_stats);
+    run_file("_shared.wgsl", "", 0, shared, shared_len, &shared_stats);
 
     DIR *d = opendir(SHADERS_DIR);
     if (!d) { free(shared); return 1; }
@@ -229,7 +229,7 @@ int main(void) {
     while ((e = readdir(d)) != NULL) {
         if (!has_suffix(e->d_name, ".wgsl")) continue;
         if (e->d_name[0] == '.') continue;
-        if (strcmp(e->d_name, "00_shared.wgsl") == 0) continue;
+        if (strcmp(e->d_name, "_shared.wgsl") == 0) continue;
         if (n_names >= 64) break;
         names[n_names++] = strdup(e->d_name);
     }
@@ -271,7 +271,7 @@ int main(void) {
         "shader", "sections", "ok", "consts", "asserts");
     fprintf(stderr,
         "  %-32s %9d %5d %7d %9d\n",
-        "00_shared.wgsl",
+        "_shared.wgsl",
         shared_stats.sections, shared_stats.sections_ok,
         shared_stats.total_consts, shared_stats.total_const_asserts);
     for (int i = 0; i < nrows; i++) {

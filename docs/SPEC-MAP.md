@@ -64,8 +64,8 @@ Risk: **🟢 low** · **🟡 medium** · **🔴 high**.
 | 1.2 | Syntax Notation | PAR | 🟢 | Reading the BNF only; no code. |
 | 1.3 | Mathematical Terms and Notation | CE / TC | 🟢 | floor, ceiling, truncate, roundUp, transpose for builtin semantics. |
 | **2** | WGSL Module | L0 / VAL | 🟢 | Lifecycle informs the API shape; module struct owned by L0. |
-| 2.1 | Shader Lifecycle | L0 | 🟢 | Inform `wgsl.h` lifecycle: *create* / *create-pipeline* phases. |
-| 2.2 | Errors | L0 / VAL | 🟢 | Three error classes: shader-creation / pipeline-creation / dynamic. v1 emits the first two. |
+| 2.1 | Shader Lifecycle | L0 | 🟢 | Inform `wgsl.h` lifecycle: *generate* / *generate-pipeline* phases. |
+| 2.2 | Errors | L0 / VAL | 🟢 | Three error classes: shader-generation / pipeline-generation / dynamic. v1 emits the first two. |
 | 2.3 | Diagnostics | L0 / VAL | 🟡 | Severity model + filterable rules + `@diagnostic` filter range nesting. |
 | 2.3.1 | Diagnostic Processing | L0 / VAL | 🟢 | "Smallest containing range with same rule" lookup — needs a sorted filter table per rule. |
 | 2.3.2 | Filterable Triggering Rules | VAL | 🟡 | `derivative_uniformity`, `subgroup_uniformity` — lifted from uniformity analysis. |
@@ -121,7 +121,7 @@ Risk: **🟢 low** · **🟡 medium** · **🔴 high**.
 | 6.5.1 | Texel Formats | TC | 🟢 | Enum table; ~30 formats. |
 | 6.5.2–7 | Texture / Sampler kinds | TC | 🟢 | |
 | 6.6 | AllTypes | TC | 🟢 | Used in spec table notation only. |
-| 6.7 | Type Aliases | RES / TC | 🟢 | Module-scope alias creates a name in same namespace. |
+| 6.7 | Type Aliases | RES / TC | 🟢 | Module-scope alias generates a name in same namespace. |
 | 6.8 | Type Specifier Grammar | PAR | 🟢 | `template_elaborated_ident` with optional `template_list`. |
 | 6.9 | Predeclared Types and Type-Generators Summary | RES | 🟢 | Table to load into predeclared scope. |
 | **7** | Variable and Value Declarations | PAR / RES / TC | 🟡 | Four declaration forms: `const` / `override` / `let` / `var`. |
@@ -153,7 +153,7 @@ Risk: **🟢 low** · **🟡 medium** · **🔴 high**.
 | 9.6 | Statements Grammar Summary | PAR | 🟢 | |
 | 9.7 | Statements Behavior Analysis | VAL | 🟡 | Per-stmt set of behaviors {Next, Break, Continue, Return}; reachability check. **Section F**. |
 | **10** | Assertions | PAR / CE / VAL | 🟢 | `const_assert` only. |
-| 10.1 | Const Assertion Statement | CE / VAL | 🟢 | Evaluate at shader-creation; must be `true`. |
+| 10.1 | Const Assertion Statement | CE / VAL | 🟢 | Evaluate at shader-generation; must be `true`. |
 | **11** | Functions | PAR / RES / TC / VAL | 🟡 | |
 | 11.1 | Declaring a User-defined Function | PAR / RES | 🟢 | |
 | 11.2 | Function Calls | TC | 🟡 | Argument types must match parameter types after conversion-rank tower. |

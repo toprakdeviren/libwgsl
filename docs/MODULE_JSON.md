@@ -2,7 +2,7 @@
 
 `wgsl_module_json(WGSLResult *)` returns a NUL-terminated JSON string
 describing the module surface that downstream tools (host bindings,
-LSP, pipeline-creation glue) need to wire WGSL into a runtime.  The
+LSP, pipeline-generation glue) need to wire WGSL into a runtime.  The
 schema is intentionally narrow — it carries the shape of the module,
 not its IR.
 
@@ -65,15 +65,19 @@ by hover).
 ```json
 {
   "name": "Vertex",
+  "size": 32,
+  "align": 16,
   "members": [
-    { "name": "pos", "type": "vec3<f32>" },
-    { "name": "uv",  "type": "vec2<f32>" }
+    { "name": "pos", "type": "vec3<f32>", "offset": 0,  "size": 12, "align": 16 },
+    { "name": "uv",  "type": "vec2<f32>", "offset": 16, "size": 8,  "align": 8 }
   ]
 }
 ```
 
-Layout (`@align`, `@size`, padding) is **not** in the v1 module summary
-— it's a Phase 8 v1.x deliverable per [`DESIGN.md`](DESIGN.md).
+Struct layout is computed with the default address-space layout rules
+(`AlignOf` / `SizeOf`).  Uniform-address-space-specific bumps are enforced
+by validation when a struct is used as `var<uniform>`, but the module JSON
+uses the default layout as the stable baseline for engine bindings.
 
 ## `overrides[]`
 
@@ -89,12 +93,13 @@ runtime auto-assigns).
 }
 ```
 
-## v1 deferrals
+## Remaining Schema Work
 
 - `vertex_attributes` / `fragment_outputs` / `interpolation` records —
-  Phase 8 owns strict entry-point IO type rules; once those land, this
-  schema gains location-tagged IO entries.
-- Per-resource layout (host-shareable size + alignment) — same gating
-  as struct layouts.
+  validation understands these rules, but the JSON schema does not yet
+  expose a compact location-tagged IO summary.
+- Per-resource layout in the selected address space.  Struct layout is
+  present, but resource records do not yet duplicate address-space-specific
+  layout metadata.
 - Filterable diagnostic configuration mirrored from `@diagnostic`
-  directives — useful for editor settings round-trip; deferred.
+  directives — useful for editor settings round-trip.

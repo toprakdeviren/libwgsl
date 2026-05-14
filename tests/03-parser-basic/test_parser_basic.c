@@ -81,6 +81,22 @@ int main(void) {
         done(&p);
     }
 
+    /* — Parser defends against malformed internal token streams — */
+    {
+        WGSLArena arena; wgsl_arena_init(&arena);
+        WGSLDiagBag diag; wgsl_diag_init(&diag);
+        WGSLSource src; wgsl_source_init(&src, "", 0);
+        WGSLLexResult lex; memset(&lex, 0, sizeof lex);
+        WGSLAst ast; memset(&ast, 0, sizeof ast);
+        int ok = wgsl_parse(&lex, &src, &arena, &diag, &ast);
+        CHECK(ok == 0, "bad token stream: parse fails");
+        CHECK(ast.root != NULL, "bad token stream: root still produced");
+        CHECK(wgsl_diag_count(&diag) >= 1, "bad token stream: diagnostic emitted");
+        wgsl_diag_destroy(&diag);
+        wgsl_source_destroy(&src);
+        wgsl_arena_destroy(&arena);
+    }
+
     /* — Minimal fn — */
     {
         P p; run(&p, "fn main() {}");
@@ -249,6 +265,44 @@ int main(void) {
         CHECK(op == WGSL_TOK_MINUS, "unary: op = -");
         CHECK(expr->children[0]->kind == WGSL_NODE_EXPR_LITERAL_INT, "unary: operand = int");
         (void)span_eq;  /* unused helper retained for richer assertions later */
+        done(&p);
+    }
+
+    /* — §8.18 mixed bitwise without parens must error — */
+    {
+        P p; run(&p, "fn t() { let x = 1 & 2 | 3; }");
+        CHECK(!(p.parse_ok && !wgsl_diag_has_error(&p.diag)), "a & b | c: must error");
+        done(&p);
+    }
+    /* — §8.18 same op repeated is OK — */
+    {
+        P p; run(&p, "fn t() { let x = 1 & 2 & 3; }");
+        CHECK((p.parse_ok && !wgsl_diag_has_error(&p.diag)), "a & b & c: ok");
+        done(&p);
+    }
+    /* — §8.18 explicit parens silence the diag — */
+    {
+        P p; run(&p, "fn t() { let x = (1 & 2) | 3; }");
+        CHECK((p.parse_ok && !wgsl_diag_has_error(&p.diag)), "(a & b) | c: ok");
+        done(&p);
+    }
+    /* — Current CTS grammar: shift mixed with relational parses by precedence. — */
+    {
+        P p; run(&p, "fn t() { let x = 1 < 2 << 3; }");
+        CHECK((p.parse_ok && !wgsl_diag_has_error(&p.diag)), "1 < 2 << 3: ok");
+        done(&p);
+    }
+    /* — §8.18 multiplicative followed by shift needs parens. — */
+    {
+        P p; run(&p, "fn t() { let x = 1u * 2u << 3u; }");
+        CHECK(!(p.parse_ok && !wgsl_diag_has_error(&p.diag)),
+              "a * b << c: must error");
+        done(&p);
+    }
+    /* — §8.18 short-circuit mixed without parens must error — */
+    {
+        P p; run(&p, "fn t() { let x = true && false || true; }");
+        CHECK(!(p.parse_ok && !wgsl_diag_has_error(&p.diag)), "&& || mixed: must error");
         done(&p);
     }
 

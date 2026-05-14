@@ -200,21 +200,17 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Shadow predeclared → error ────────────────────────────── */
+    /* ── Shadow predeclared → allowed (WGSL §5.1) ──────────────── */
     {
         P p; run(&p,
             "const i32: i32 = 0;\n");
-        CHECK(!p.resolve_ok, "shadow-pred: must error");
-        CHECK(has_error_with(&p.diag, "shadows a predeclared"),
-              "shadow-pred: diagnostic");
+        CHECK(p.resolve_ok, "shadow-pred: allowed");
         done(&p);
     }
     {
         P p; run(&p,
             "fn f() { let bool = 1; }\n");
-        CHECK(!p.resolve_ok, "shadow-pred-fn: must error");
-        CHECK(has_error_with(&p.diag, "shadows a predeclared"),
-              "shadow-pred-fn: diagnostic");
+        CHECK(p.resolve_ok, "shadow-pred-fn: allowed");
         done(&p);
     }
 

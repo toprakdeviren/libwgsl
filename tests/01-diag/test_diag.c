@@ -134,6 +134,32 @@ int main(void) {
     CHECK(strcmp(d1_again->rule, "derivative_uniformity") == 0,
           "d1 rule consistent after re-fetch");
 
+    /* Nested diagnostic filter scopes restore the parent scope. */
+    wgsl_diag_push_scope(&b);
+    wgsl_diag_set_filter(&b, "derivative_uniformity", 21, 0);
+    ok = wgsl_diag_emit_at(
+        &b, &src, WGSL_DIAG_ERROR, 0, 1,
+        "derivative_uniformity", "outer suppressed");
+    CHECK(ok == 1, "outer filter emit ok");
+    CHECK(wgsl_diag_count(&b) == 20, "outer off suppresses diagnostic");
+
+    wgsl_diag_push_scope(&b);
+    wgsl_diag_set_filter(&b, "derivative_uniformity", 21, WGSL_DIAG_ERROR);
+    ok = wgsl_diag_emit_at(
+        &b, &src, WGSL_DIAG_WARNING, 0, 1,
+        "derivative_uniformity", "inner restored error");
+    CHECK(ok == 1, "inner filter emit ok");
+    CHECK(wgsl_diag_count(&b) == 21, "inner error emits diagnostic");
+    CHECK(wgsl_diag_has_error(&b) == 1, "inner error counted");
+    wgsl_diag_pop_scope(&b);
+
+    ok = wgsl_diag_emit_at(
+        &b, &src, WGSL_DIAG_ERROR, 0, 1,
+        "derivative_uniformity", "outer suppressed again");
+    CHECK(ok == 1, "outer filter restored emit ok");
+    CHECK(wgsl_diag_count(&b) == 21, "outer scope restored after inner pop");
+    wgsl_diag_pop_scope(&b);
+
     /* Destroy + reuse. */
     wgsl_diag_destroy(&b);
     CHECK(wgsl_diag_count(&b) == 0, "post-destroy: 0");

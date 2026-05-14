@@ -5,10 +5,16 @@ AR      ?= ar
 CFLAGS  ?= -O2 -g -Wall -Wextra -Werror -Wno-unused-parameter \
            -std=c11 -fno-strict-aliasing -fvisibility=hidden
 INCLUDES = -Iinclude -Isrc -Ivendor/unicode/include
+DEPFLAGS = -MMD -MP
 
 BUILD_DIR  = .build
 LIB_NAME   = libwgsl.a
 LIB        = $(BUILD_DIR)/$(LIB_NAME)
+WGSL_BIN  ?= wgsl
+CLI_SRC    = tools/wgsl_cli.c
+CLI_OBJ    = $(BUILD_DIR)/tools/wgsl_cli.o
+CLI_BIN    = $(BUILD_DIR)/$(WGSL_BIN)
+EMBEDDER_EXAMPLE = $(BUILD_DIR)/examples/embedder
 
 UNICODE_LIB = vendor/unicode/libunicode.native.a
 
@@ -35,8 +41,18 @@ LIB_SRCS = \
     src/types.c \
     src/resolver.c \
     src/consteval.c \
-    src/check.c \
-    src/validate.c \
+    src/check/check.c \
+    src/check/types.c \
+    src/check/exprs.c \
+    src/check/decls.c \
+    src/layout.c \
+    src/validate/validate.c \
+    src/validate/attrs.c \
+    src/validate/io.c \
+    src/validate/behavior.c \
+    src/validate/access.c \
+    src/validate/layout.c \
+    src/validate/uniformity.c \
     src/glob.c \
     src/toml.c \
     src/project.c \
@@ -45,14 +61,29 @@ LIB_SRCS = \
 LIB_OBJS = $(LIB_SRCS:src/%.c=$(BUILD_DIR)/%.o)
 
 # One test executable per `tests/NN-name/test_*.c`.
-TEST_SRCS = $(wildcard tests/*/test_*.c)
-TEST_BINS = $(TEST_SRCS:tests/%.c=$(BUILD_DIR)/tests/%)
+# Split into two groups:
+#   - TEST_SRCS         : unit / API tests, run by `make test`
+#   - CORPUS_TEST_SRCS  : corpus walks over `examples/shaders/` (slower,
+#                         and treats real-world shader fidelity as a
+#                         separate failure surface).  Run via
+#                         `make test-corpus`.
+ALL_TEST_SRCS    = $(wildcard tests/*/test_*.c)
+CORPUS_TEST_SRCS = $(filter %_corpus.c %_parser_bench.c,$(ALL_TEST_SRCS))
+TEST_SRCS        = $(filter-out $(CORPUS_TEST_SRCS),$(ALL_TEST_SRCS))
+TEST_BINS        = $(TEST_SRCS:tests/%.c=$(BUILD_DIR)/tests/%)
+CORPUS_TEST_BINS = $(CORPUS_TEST_SRCS:tests/%.c=$(BUILD_DIR)/tests/%)
 
-.PHONY: all lib test tsan wasm wasm-test wasm-corpus clean help
+.PHONY: all lib cli test test-cli example-embedder test-corpus tsan wasm wasm-test gen-builtins clean help
 
 all: lib
 
 lib: $(LIB)
+
+cli: $(CLI_BIN)
+
+gen-builtins:
+	python3 tools/gen-wgsl-builtins.py def/wgsl.def src/check/builtins.gen.h \
+		--names-output src/builtins.names.gen.h
 
 $(LIB): $(LIB_OBJS)
 	@mkdir -p $(@D)
@@ -61,14 +92,33 @@ $(LIB): $(LIB_OBJS)
 
 $(BUILD_DIR)/%.o: src/%.c
 	@mkdir -p $(@D)
-	@$(CC) $(CFLAGS) $(INCLUDES) -c -o $@ $<
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INCLUDES) -c -o $@ $<
 	@echo "  CC      $<"
+
+$(CLI_OBJ): $(CLI_SRC)
+	@mkdir -p $(@D)
+	@$(CC) $(CFLAGS) $(DEPFLAGS) $(INCLUDES) -c -o $@ $<
+	@echo "  CC      $<"
+
+$(CLI_BIN): $(CLI_OBJ) $(LIB)
+	@mkdir -p $(@D)
+	@$(CC) $(CFLAGS) -o $@ $(CLI_OBJ) $(LIB) $(UNICODE_LIB) $(PTHREAD_LIBS)
+	@echo "  LD      $@"
+
+example-embedder: $(EMBEDDER_EXAMPLE)
+	@$(EMBEDDER_EXAMPLE)
+
+$(EMBEDDER_EXAMPLE): examples/embedder.c $(LIB)
+	@mkdir -p $(@D)
+	@$(CC) $(CFLAGS) $(DEPFLAGS) -MF $@.d $(INCLUDES) -o $@ $< \
+	    $(LIB) $(UNICODE_LIB) $(PTHREAD_LIBS)
+	@echo "  LD      $@"
 
 # Tests link against libwgsl.a; libunicode is added too even when unused
 # (linker only pulls in what's referenced).
 test: $(TEST_BINS)
 	@echo
-	@echo "  Running $(words $(TEST_BINS)) test(s):"
+	@echo "  Running $(words $(TEST_BINS)) unit test(s):"
 	@pass=0; fail=0; \
 	 for t in $(TEST_BINS); do \
 	    if $$t; then pass=$$((pass+1)); else fail=$$((fail+1)); fi; \
@@ -76,9 +126,32 @@ test: $(TEST_BINS)
 	 echo "  $$pass passed, $$fail failed"; \
 	 [ $$fail -eq 0 ]
 
+test-cli: $(CLI_BIN)
+	@printf 'fn f() {}\n' | $(CLI_BIN) check --quiet -
+	@set +e; \
+	 printf 'fn f() { var x: i32 = true; }\n' | \
+	    $(CLI_BIN) check --quiet - >/dev/null 2>&1; \
+	 rc=$$?; [ $$rc -eq 1 ]
+	@$(CLI_BIN) json examples/hello-triangle.wgsl >/dev/null
+	@$(CLI_BIN) ast examples/hello-triangle.wgsl >/dev/null
+	@echo "  CLI     smoke passed"
+
+# Corpus tests — walk `examples/shaders/` and the bench fixtures.  Run
+# separately because they're slow and gate real-world shader fidelity
+# rather than language-rule conformance.
+test-corpus: $(CORPUS_TEST_BINS)
+	@echo
+	@echo "  Running $(words $(CORPUS_TEST_BINS)) corpus test(s):"
+	@pass=0; fail=0; \
+	 for t in $(CORPUS_TEST_BINS); do \
+	    if $$t; then pass=$$((pass+1)); else fail=$$((fail+1)); fi; \
+	 done; \
+	 echo "  $$pass passed, $$fail failed"; \
+	 [ $$fail -eq 0 ]
+
 $(BUILD_DIR)/tests/%: tests/%.c $(LIB)
 	@mkdir -p $(@D)
-	@$(CC) $(CFLAGS) $(INCLUDES) -o $@ $< $(LIB) $(UNICODE_LIB) $(PTHREAD_LIBS)
+	@$(CC) $(CFLAGS) $(DEPFLAGS) -MF $@.d $(INCLUDES) -o $@ $< $(LIB) $(UNICODE_LIB) $(PTHREAD_LIBS)
 	@echo "  LD      $@"
 
 # ─────────────────────────────────────────────────────────────────────
@@ -106,7 +179,7 @@ tsan: $(TSAN_TEST_BINS)
 
 $(TSAN_BUILD_DIR)/%.o: src/%.c
 	@mkdir -p $(@D)
-	@$(CC) $(TSAN_CFLAGS) $(INCLUDES) -c -o $@ $<
+	@$(CC) $(TSAN_CFLAGS) $(DEPFLAGS) $(INCLUDES) -c -o $@ $<
 	@echo "  CC[ts]  $<"
 
 $(TSAN_LIB): $(TSAN_LIB_OBJS)
@@ -116,7 +189,7 @@ $(TSAN_LIB): $(TSAN_LIB_OBJS)
 
 $(TSAN_BUILD_DIR)/tests/%: tests/%.c $(TSAN_LIB)
 	@mkdir -p $(@D)
-	@$(CC) $(TSAN_CFLAGS) $(TSAN_LDFLAGS) $(INCLUDES) \
+	@$(CC) $(TSAN_CFLAGS) $(TSAN_LDFLAGS) $(DEPFLAGS) -MF $@.d $(INCLUDES) \
 	    -o $@ $< $(TSAN_LIB) $(UNICODE_LIB) $(PTHREAD_LIBS)
 	@echo "  LD[ts]  $@"
 
@@ -134,7 +207,7 @@ WASM_BUILD_DIR    = $(BUILD_DIR)/wasm
 WASM_BUNDLE       = $(WASM_BUILD_DIR)/wgsl_compiler.js
 UNICODE_LIB_WASM  = vendor/unicode/libunicode.wasm.a
 
-EM_CFLAGS = -O2 -Wall -Wextra -Wno-unused-parameter \
+EM_CFLAGS = -Oz -flto -Wall -Wextra -Wno-unused-parameter \
             -std=c11 -fno-strict-aliasing -fvisibility=hidden \
             -DNDEBUG -DWGSL_NO_FS
 
@@ -155,6 +228,7 @@ EM_RUNTIME_METHODS = cwrap,ccall,UTF8ToString,stringToUTF8,\
 lengthBytesUTF8,getValue,setValue,HEAP8,HEAPU8,HEAPU32
 
 EM_LDFLAGS = \
+    -Oz -flto --closure 1 \
     -s WASM=1 \
     -s MODULARIZE=1 \
     -s EXPORT_NAME=WGSL \
@@ -163,6 +237,8 @@ EM_LDFLAGS = \
     -s ALLOW_MEMORY_GROWTH=1 \
     -s INITIAL_MEMORY=16MB \
     -s STACK_SIZE=2MB \
+    -s ASSERTIONS=0 \
+    -s FILESYSTEM=0 \
     -s EXPORTED_FUNCTIONS='[$(EM_EXPORTS)]' \
     -s EXPORTED_RUNTIME_METHODS='[$(EM_RUNTIME_METHODS)]' \
     --no-entry
@@ -179,7 +255,7 @@ $(WASM_BUNDLE): $(WASM_LIB_OBJS) $(UNICODE_LIB_WASM)
 
 $(WASM_BUILD_DIR)/%.o: src/%.c
 	@mkdir -p $(@D)
-	@$(EMCC) $(EM_CFLAGS) $(INCLUDES) -c -o $@ $<
+	@$(EMCC) $(EM_CFLAGS) $(DEPFLAGS) $(INCLUDES) -c -o $@ $<
 	@echo "  EMCC    $<"
 
 # Smoke-test the bundle in Node.  Verifies the public C API survives
@@ -194,8 +270,20 @@ clean:
 help:
 	@echo "Targets:"
 	@echo "  make            — build $(LIB_NAME)"
+	@echo "  make cli        — build .build/$(WGSL_BIN) command-line tool"
 	@echo "  make test       — build + run all tests under tests/*"
+	@echo "  make test-cli   — build + smoke-test the CLI"
+	@echo "  make example-embedder — build + run the C API example"
 	@echo "  make tsan       — build + run TSan smoke (tests/01-tsan/*)"
 	@echo "  make wasm       — build wgsl_compiler.{js,wasm} via Emscripten"
 	@echo "  make wasm-test  — run Node smoke test against the wasm bundle"
 	@echo "  make clean      — remove $(BUILD_DIR)"
+
+-include $(LIB_OBJS:.o=.d)
+-include $(CLI_OBJ:.o=.d)
+-include $(EMBEDDER_EXAMPLE:=.d)
+-include $(TSAN_LIB_OBJS:.o=.d)
+-include $(WASM_LIB_OBJS:.o=.d)
+-include $(TEST_BINS:=.d)
+-include $(CORPUS_TEST_BINS:=.d)
+-include $(TSAN_TEST_BINS:=.d)

@@ -32,7 +32,7 @@ Quotes from `arch.md`:
 
 - **Reader** — "Readers are responsible for parsing a shader program and populating a `ProgramBuilder`" (SPIR-V and WGSL).
 - **ProgramBuilder** — "the interface to construct an immutable `Program`".
-- **Resolver** — runs automatically; "creates the `Program`s semantic information by analyzing the `Program`s AST".
+- **Resolver** — runs automatically; "generates the `Program`s semantic information by analyzing the `Program`s AST".
 - **Program** — "holds an immutable version of the information from the `ProgramBuilder` along with semantic information".
 - **Transforms** — "operates by cloning the input `Program` into a new `ProgramBuilder`, applying required changes".
 

@@ -3,6 +3,7 @@
  */
 #include "internal/arena.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -62,17 +63,23 @@ void *wgsl_arena_alloc_aligned(WGSLArena *a, size_t size, size_t align) {
         char *base = (char *)(c + 1);
         size_t off = c->used;
         size_t pad = ((align - ((uintptr_t)(base + off) & (align - 1))) & (align - 1));
-        if (off + pad + size <= c->capacity) {
+        if (off <= c->capacity &&
+            pad <= c->capacity - off &&
+            size <= c->capacity - off - pad)
+        {
             void *p = base + off + pad;
             c->used = off + pad + size;
-            a->total_bytes += size;
+            a->total_bytes = (size > SIZE_MAX - a->total_bytes)
+                ? SIZE_MAX : a->total_bytes + size;
             a->alloc_count += 1;
             return p;
         }
     }
 
     size_t cap = WGSL_ARENA_DEFAULT_CHUNK_BYTES;
-    if (size + align > cap) cap = size + align;
+    if (align - 1 > SIZE_MAX - size) return NULL;
+    size_t need = size + (align - 1);
+    if (need > cap) cap = need;
 
     WGSLArenaChunk *nc = wgsl_arena_new_chunk(cap);
     if (!nc) return NULL;
@@ -81,9 +88,15 @@ void *wgsl_arena_alloc_aligned(WGSLArena *a, size_t size, size_t align) {
 
     char *base = (char *)(nc + 1);
     size_t pad = ((align - ((uintptr_t)base & (align - 1))) & (align - 1));
+    if (pad > nc->capacity || size > nc->capacity - pad) {
+        a->head = nc->next;
+        free(nc);
+        return NULL;
+    }
     void *p = base + pad;
     nc->used = pad + size;
-    a->total_bytes += size;
+    a->total_bytes = (size > SIZE_MAX - a->total_bytes)
+        ? SIZE_MAX : a->total_bytes + size;
     a->alloc_count += 1;
     return p;
 }

@@ -9,7 +9,7 @@
  *   - binary arith: + - * / % on int / float
  *   - binary compare: == != < <= > >= producing bool
  *   - binary logical: && || on bool
- *   - binary bitwise: & | ^ << >> on int (and & | ^ on bool)
+ *   - binary bitwise: & | ^ << >> on int (and & | on bool)
  *   - paren grouping
  *   - implicit conversions: AbstractInt + AbstractFloat → AbstractFloat;
  *     Abstract + i32 → i32; Abstract + u32 → u32
@@ -263,10 +263,7 @@ int main(void) {
     check_eval_fails("1 % 0",       "modulo by zero");
     check_eval_fails("1.0 / 0.0",   "division by zero");
     check_eval_fails("1i + 1u",     "no implicit conversion");
-    /* §6.2.3: -(-INT32_MIN) is not representable in i32.  Construct
-     * the value via `1i << 31` (which truncates to INT32_MIN at i32
-     * width), then attempt the negation. */
-    check_eval_fails("-(1i << 31)", "not representable in i32");
+    check_eval_fails("1i << 31",    "left shift result out of range for i32");
 
     /* ── Materialise: default tower ────────────────────────────── */
     {
@@ -320,6 +317,80 @@ int main(void) {
             CHECK(v.type == t.types.t_f32, "type → f32");
             CHECK(v.kind == WGSL_VAL_FLOAT, "kind switched to FLOAT");
             CHECK(v.u.f == 7.0,            "int → float value");
+        } else { fail += 1; }
+        cleanup(&t);
+    }
+
+    /* ── §3.5.2 significand truncation ─────────────────────────── *
+     *                                                             *
+     * Decimal literals keep at most 20 significant digits; hex at *
+     * most 16.  Extra significant digits are either truncated or  *
+     * rounded up (implementation choice).  We chose truncation —  *
+     * pin the two values strtod can produce against the           *
+     * spec-allowed pair.                                          */
+    {
+        /* 21-significant-digit decimal: digits are '1' then 19
+         * zeros then '1' (with a trailing `.0` after).  The
+         * 21st significant digit (the trailing '1') is replaced
+         * by '0' under truncation → 1e20.  Round-up would carry
+         * back to the leading '1' → 1.0000000000000001e20.
+         * Either is spec-conformant. */
+        TestCtx t; WGSLValue v;
+        if (eval_to(&t, "100000000000000000001.0", &v)) {
+            CHECK(v.kind == WGSL_VAL_FLOAT,
+                  "§3.5.2 dec truncate: result is float");
+            int truncated  = (v.u.f == 1.0e20);
+            int rounded_up = (v.u.f == 1.0000000000000001e20);
+            CHECK(truncated || rounded_up,
+                  "§3.5.2 dec truncate: 21-sig-digit literal is one of "
+                  "{1e20, 1.0000000000000001e20}");
+        } else { fail += 1; }
+        cleanup(&t);
+    }
+    {
+        /* 18-significant-digit hex: '1' then 16 zeros then '1' with
+         * `p0` exponent.  After truncating to 16 sig digits the
+         * trailing '1' becomes '0' → 0x1p0 = 1.0. */
+        TestCtx t; WGSLValue v;
+        if (eval_to(&t, "0x1.00000000000000001p0", &v)) {
+            CHECK(v.kind == WGSL_VAL_FLOAT,
+                  "§3.5.2 hex truncate: result is float");
+            int truncated  = (v.u.f == 1.0);
+            int rounded_up = (v.u.f == 0x1.0000000000001p0);
+            CHECK(truncated || rounded_up,
+                  "§3.5.2 hex truncate: 18-sig-digit hex literal is one of "
+                  "{1.0, 0x1.0000000000001p0}");
+        } else { fail += 1; }
+        cleanup(&t);
+    }
+    {
+        /* Exactly at the cutoff: 20 significant decimal digits.    *
+         * No truncation should fire; the value is whatever the     *
+         * default double-rounding gives. */
+        TestCtx t; WGSLValue v;
+        if (eval_to(&t, "12345678901234567890.0", &v)) {
+            CHECK(v.kind == WGSL_VAL_FLOAT,
+                  "§3.5.2 dec boundary: 20-sig-digit literal evaluates");
+            /* 12345678901234567890 isn't representable in double — it
+             * rounds to 1.2345678901234567168e19.  Just pin that the
+             * value is close (within 1024 ulp of the nominal). */
+            double want = 1.2345678901234568e19;
+            double tol  = 1e6;  /* ~ ulp at this magnitude */
+            CHECK(v.u.f > want - tol && v.u.f < want + tol,
+                  "§3.5.2 dec boundary: ~1.2345...e19");
+        } else { fail += 1; }
+        cleanup(&t);
+    }
+    {
+        /* Significant-digit definition: leading and trailing zeros
+         * are not significant.  `0.00012345` has 5 significant
+         * digits (1,2,3,4,5) so no truncation. */
+        TestCtx t; WGSLValue v;
+        if (eval_to(&t, "0.00012345", &v)) {
+            CHECK(v.kind == WGSL_VAL_FLOAT,
+                  "§3.5.2: leading zeros don't count as significant");
+            CHECK(v.u.f == 0.00012345,
+                  "0.00012345 unchanged by truncation");
         } else { fail += 1; }
         cleanup(&t);
     }

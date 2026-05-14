@@ -102,6 +102,38 @@ int main(void) {
         wgsl_project_close(p);
     }
 
+    /* Preamble composition: preamble[k] receives preamble[0..k-1]
+     * regardless of whether it matches the inject globs.  A later
+     * preamble that depends on an earlier one (e.g. infrastructure
+     * helpers calling shared `flat_id`) must resolve cleanly when
+     * the user opens it directly. */
+    {
+        const char src[] =
+            "[preamble]\n"
+            "files = [\"00_shared.wgsl\", \"01_infra.wgsl\", \"02_extra.wgsl\"]\n"
+            "auto_inject_into = [\"*.wgsl\"]\n";
+        WGSLProject *p = wgsl_project_open_from_string(src, sizeof src - 1, NULL, 0);
+        int n = -1;
+
+        const char *const *files = wgsl_project_match(p, "00_shared.wgsl", &n);
+        CHECK(files == NULL && n == 0,
+              "preamble[0]: empty prefix");
+
+        files = wgsl_project_match(p, "01_infra.wgsl", &n);
+        CHECK(files != NULL && n == 1 && strcmp(files[0], "00_shared.wgsl") == 0,
+              "preamble[1]: gets preamble[0] only");
+
+        files = wgsl_project_match(p, "02_extra.wgsl", &n);
+        CHECK(files != NULL && n == 2 &&
+              strcmp(files[0], "00_shared.wgsl") == 0 &&
+              strcmp(files[1], "01_infra.wgsl") == 0,
+              "preamble[2]: gets preamble[0..1]");
+
+        files = wgsl_project_match(p, "kernel.wgsl", &n);
+        CHECK(files != NULL && n == 3, "non-preamble: full set");
+        wgsl_project_close(p);
+    }
+
     /* No `auto_inject_into` → no preamble for any file. */
     {
         const char src[] =

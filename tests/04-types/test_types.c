@@ -12,6 +12,7 @@
  */
 #include "internal/types.h"
 #include "internal/arena.h"
+#include "internal/resolver.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -107,6 +108,17 @@ int main(void) {
     CHECK(arr4_a != arr_rs_a,         "fixed != runtime");
     CHECK(arr4_a != arr8,             "different lengths != ");
 
+    /* Override-sized arrays keep full override-symbol identity. */
+    int override_a = 0;
+    int override_b = 0;
+    WGSLTypeInfo *arr_ov_a1 = wgsl_type_array_override(&s, t_f32, &override_a);
+    WGSLTypeInfo *arr_ov_a2 = wgsl_type_array_override(&s, t_f32, &override_a);
+    WGSLTypeInfo *arr_ov_b  = wgsl_type_array_override(&s, t_f32, &override_b);
+    CHECK(arr_ov_a1 == arr_ov_a2, "same override symbol interns same array");
+    CHECK(arr_ov_a1 != arr_ov_b,  "different override symbols intern distinct arrays");
+    CHECK(arr_ov_a1 != arr_rs_a,  "override-sized array != runtime array");
+    CHECK(arr_ov_a1->ref == t_f32, "override-sized array keeps element in ref");
+
     /* Predicates. */
     CHECK(wgsl_type_is_scalar(t_bool),  "bool is scalar");
     CHECK(wgsl_type_is_scalar(t_f32),   "f32 is scalar");
@@ -194,6 +206,10 @@ int main(void) {
     check_format(atom_u32_a,   "atomic<u32>",            "fmt atomic");
     check_format(arr4_a,       "array<f32, 4>",          "fmt array fixed");
     check_format(arr_rs_a,     "array<f32>",             "fmt array runtime");
+    check_format(wgsl_type_ptr(&s, WGSL_AS_FUNCTION, t_i32, WGSL_ACCESS_READ_WRITE),
+                 "ptr<function, i32, read_write>",       "fmt ptr");
+    check_format(wgsl_type_ref(&s, WGSL_AS_STORAGE, t_u32, WGSL_ACCESS_READ),
+                 "ref<storage, u32, read>",              "fmt ref");
     /* Nested */
     WGSLTypeInfo *arr_of_vec = wgsl_type_array(&s, vec4f, 16);
     check_format(arr_of_vec,   "array<vec4<f32>, 16>",   "fmt nested");

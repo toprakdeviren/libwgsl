@@ -49,6 +49,7 @@ typedef enum {
     WGSL_SYM_PREDECLARED_TYPE_ALIAS,  /* vec3f, mat4x4f, … — `type` is set */
     WGSL_SYM_PREDECLARED_ADDR_SPACE,  /* storage / uniform / workgroup / private / function */
     WGSL_SYM_PREDECLARED_ACCESS_MODE, /* read / write / read_write */
+    WGSL_SYM_PREDECLARED_TEXEL_FORMAT,/* rgba8unorm / r32float / … (§6.5.10) */
     WGSL_SYM_PREDECLARED_FN,          /* sin, cos, dot, dpdx, textureSample, … */
     WGSL_SYM_PREDECLARED_VALUE,       /* (no current entries — `true`/`false` are keywords) */
 
@@ -65,13 +66,34 @@ typedef enum {
     WGSL_SYM_KIND_COUNT,
 } WGSLSymKind;
 
+typedef enum {
+    WGSL_AS_NONE = 0,
+    WGSL_AS_FUNCTION,
+    WGSL_AS_PRIVATE,
+    WGSL_AS_WORKGROUP,
+    WGSL_AS_UNIFORM,
+    WGSL_AS_STORAGE,
+    WGSL_AS_HANDLE,
+    WGSL_AS_PUSH_CONSTANT,
+    WGSL_AS_IMMEDIATE,
+} WGSLAddressSpace;
+
+
+
 typedef struct WGSLSymbol {
     const char  *name;      /* borrowed (source bytes or static literal) */
     uint32_t     name_len;
     uint16_t     kind;      /* WGSLSymKind */
-    uint16_t     flags;     /* reserved */
+    uint16_t     flags;     /* WGSLSymKind */
+#define WGSL_SYM_FLAG_MUST_USE (1u << 0)
+#define WGSL_SYM_FLAG_VERTEX   (1u << 1)
+#define WGSL_SYM_FLAG_FRAGMENT (1u << 2)
+#define WGSL_SYM_FLAG_COMPUTE  (1u << 3)
+#define WGSL_SYM_FLAG_TYPE_RESOLVING (1u << 8)
     WGSLNode    *ast;       /* declaration node; NULL for predeclared    */
     WGSLTypeInfo *type;     /* resolved type (when applicable)           */
+    uint8_t      as;        /* WGSLAddressSpace                          */
+    uint8_t      am;        /* WGSLAccessMode                            */
 } WGSLSymbol;
 
 typedef struct WGSLScope {

@@ -34,9 +34,6 @@ typedef enum {
 
     /* — Module structure — */
     WGSL_NODE_TRANSLATION_UNIT,
-    WGSL_NODE_DIR_ENABLE,           /* enable f16, dual_source_blending; */
-    WGSL_NODE_DIR_REQUIRES,         /* requires readonly_and_readwrite_storage_textures; */
-    WGSL_NODE_DIR_DIAGNOSTIC,       /* diagnostic(off, derivative_uniformity); */
 
     /* — Declarations — */
     WGSL_NODE_DECL_STRUCT,
@@ -92,6 +89,10 @@ typedef enum {
     WGSL_NODE_ATTRIBUTE,                /* @group(0), @binding(2), ... */
     WGSL_NODE_TEMPLATE_ARG_LIST,        /* < ... > opaque list at parse time */
 
+    WGSL_NODE_DIR_ENABLE,
+    WGSL_NODE_DIR_REQUIRES,
+    WGSL_NODE_DIR_DIAGNOSTIC,
+
     WGSL_NODE_KIND_COUNT,
 } WGSLNodeKind;
 
@@ -103,7 +104,13 @@ enum {
     WGSL_FLAG_RESOLVED      = 1u << 3,  /* resolver visited this node          */
     WGSL_FLAG_TYPED         = 1u << 4,  /* type checker assigned a type        */
     WGSL_FLAG_CONST_EVALED  = 1u << 5,  /* const-evaluator produced a value    */
-    /* — bits 6..15 reserved — */
+    WGSL_FLAG_TYPING        = 1u << 6,  /* type checker is currently typing    */
+    WGSL_FLAG_CONST_EVALING = 1u << 7,  /* const-evaluator is currently typing */
+    WGSL_FLAG_NONUNIFORM    = 1u << 8,  /* §15.2.9: expr is may-be-non-uniform */
+    WGSL_FLAG_DIVERGENT_CF  = 1u << 9,  /* §15.2.9: stmt reached in divergent CF */
+    WGSL_FLAG_ATTR_PARENS   = 1u << 10, /* parser: attribute used (...) syntax */
+    WGSL_FLAG_SUBGROUP_UNIFORM = 1u << 11, /* §15.2.10: subgroup-uniform expr */
+    /* — bits 12..15 reserved — */
 };
 
 struct WGSLNode {

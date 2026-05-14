@@ -85,6 +85,8 @@ int main(void) {
     CHECK(wgsl_arena_alloc(&a, 0) == NULL,           "zero size returns NULL");
     CHECK(wgsl_arena_alloc_aligned(&a, 8, 0) == NULL, "zero align rejected");
     CHECK(wgsl_arena_alloc_aligned(&a, 8, 7) == NULL, "non-pow2 align rejected");
+    CHECK(wgsl_arena_alloc_aligned(&a, SIZE_MAX, 8) == NULL,
+          "oversized allocation rejected");
 
     /* — (a.6) Teardown leaves arena in a reusable empty state — */
     wgsl_arena_destroy(&a);

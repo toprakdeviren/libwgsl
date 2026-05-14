@@ -44,8 +44,8 @@ every shipped pass without false negatives or false positives.
 | §       | Title                            | Status | Notes |
 |---------|----------------------------------|:------:|-------|
 | 1.x     | Introduction / overview          |   —    | Non-normative. |
-| 2.1     | Shader Lifecycle                 |   ✅    | `wgsl_check` is the v1 entry point; pipeline-creation phase is host-side. |
-| 2.2     | Errors                           |   ✅    | Shader-creation + pipeline-creation classes; runtime errors out of scope. |
+| 2.1     | Shader Lifecycle                 |   ✅    | `wgsl_check` is the v1 entry point; pipeline-generation phase is host-side. |
+| 2.2     | Errors                           |   ✅    | Shader-generation + pipeline-generation classes; runtime errors out of scope. |
 | 2.3     | Diagnostics                      |   ✅    | LSP-shape spans, severity model, message arena. |
 | 2.3.1   | Diagnostic Processing            |   ◐    | "Smallest containing range with same rule" lookup not yet implemented; v1.x. |
 | 2.3.2   | Filterable Triggering Rules      |   ✗    | Bound to uniformity (`derivative_uniformity` / `subgroup_uniformity`); blocked on §15.2. |
@@ -150,7 +150,7 @@ every shipped pass without false negatives or false positives.
 
 | §    | Title                       | Status | Notes |
 |------|-----------------------------|:------:|-------|
-| 10.1 | `const_assert`              |   ✅    | Eval'd at shader-creation; non-bool / false → diag. |
+| 10.1 | `const_assert`              |   ✅    | Eval'd at shader-generation; non-bool / false → diag. |
 
 ## §11  Functions
 

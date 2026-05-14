@@ -65,6 +65,7 @@ typedef enum {
     WGSL_TOK_KW_TRUE,
     WGSL_TOK_KW_VAR,
     WGSL_TOK_KW_WHILE,
+    WGSL_TOK_RESERVED,
 
     /* — Punctuation (§16.3) — */
     WGSL_TOK_LPAREN,                /* (  */

@@ -15,6 +15,8 @@
  *   - `override` decl walked without exploding (Iter B no-op)
  */
 #include "internal/consteval.h"
+#include "internal/check.h"
+#include "internal/validate.h"
 #include "internal/lexer.h"
 #include "internal/parser.h"
 #include "internal/resolver.h"
@@ -42,9 +44,14 @@ typedef struct {
     WGSLTypeStore      types;
     WGSLResolver       res;
     WGSLConstEvaluator cev;
+    WGSLTypeChecker    tc;
+    WGSLValidator      val;
     int                parse_ok;
     int                resolve_ok;
     int                ce_ok;
+    int                tc_ok;
+    int                val_ok;
+    int                ok;
 } P;
 
 static void run(P *p, const char *text) {
@@ -60,9 +67,16 @@ static void run(P *p, const char *text) {
                                  &p->diag, &p->types, &p->res);
     p->ce_ok = wgsl_consteval(&p->ast, &p->src, &p->arena,
                               &p->diag, &p->types, &p->res, &p->cev);
+    p->tc_ok = wgsl_typecheck(&p->ast, &p->src, &p->arena,
+                              &p->diag, &p->types, &p->res, &p->cev, &p->tc);
+    p->val_ok = wgsl_validate(&p->ast, &p->src, &p->arena,
+                              &p->diag, &p->types, &p->res, &p->cev, &p->tc, &p->val);
+    p->ok = p->ce_ok && p->tc_ok && p->val_ok;
 }
 
 static void done(P *p) {
+    wgsl_validator_destroy(&p->val);
+    wgsl_typecheck_destroy(&p->tc);
     wgsl_consteval_destroy(&p->cev);
     wgsl_resolver_destroy(&p->res);
     wgsl_types_destroy(&p->types);
@@ -112,19 +126,19 @@ int main(void) {
     /* ── Module-scope const: untyped ───────────────────────────── */
     {
         P p; run(&p, "const N = 4;\n");
-        CHECK(p.ce_ok, "const N = 4: ce_ok");
+        CHECK(p.ok, "const N = 4: ce_ok");
         const WGSLValue *v = value_of(&p, "N");
         CHECK(v && v->kind == WGSL_VAL_INT, "N: kind INT");
         CHECK(v && v->u.i == 4,             "N: value 4");
-        /* Untyped → default concretisation: AbstractInt → i32 */
-        CHECK(v && v->type == p.types.t_i32, "N: i32 after concretize");
+        /* Untyped const keeps AbstractInt; use sites materialize it. */
+        CHECK(v && v->type == p.types.t_abstract_int, "N: AbstractInt");
         done(&p);
     }
 
     /* ── Module-scope typed const ─────────────────────────────── */
     {
         P p; run(&p, "const N: u32 = 256;\n");
-        CHECK(p.ce_ok, "typed const u32: ce_ok");
+        CHECK(p.ok, "typed const u32: ce_ok");
         const WGSLValue *v = value_of(&p, "N");
         CHECK(v && v->u.i == 256 && v->type == p.types.t_u32,
               "N: 256u32");
@@ -134,7 +148,7 @@ int main(void) {
     /* ── Typed const, abstract literal materialised to f32 ───── */
     {
         P p; run(&p, "const PI: f32 = 314;\n");   /* 314 → 314.0f */
-        CHECK(p.ce_ok, "typed const f32: ce_ok");
+        CHECK(p.ok, "typed const f32: ce_ok");
         const WGSLValue *v = value_of(&p, "PI");
         CHECK(v && v->kind == WGSL_VAL_FLOAT && v->type == p.types.t_f32,
               "PI: float f32");
@@ -145,7 +159,7 @@ int main(void) {
     /* ── Typed const range error ──────────────────────────────── */
     {
         P p; run(&p, "const N: u32 = -1;\n");
-        CHECK(!p.ce_ok, "u32 = -1: must error");
+        CHECK(!p.ok, "u32 = -1: must error");
         CHECK(has_error_with(&p.diag, "out of range"),
               "u32 = -1: out-of-range diag");
         done(&p);
@@ -156,7 +170,7 @@ int main(void) {
         P p; run(&p,
             "const A = 4;\n"
             "const B = A * 2 + 1;\n");
-        CHECK(p.ce_ok, "B = A * 2 + 1: ce_ok");
+        CHECK(p.ok, "B = A * 2 + 1: ce_ok");
         const WGSLValue *vb = value_of(&p, "B");
         CHECK(vb && vb->u.i == 9, "B = 9");
         done(&p);
@@ -165,19 +179,19 @@ int main(void) {
     /* ── const_assert literal pass ────────────────────────────── */
     {
         P p; run(&p, "const_assert true;\n");
-        CHECK(p.ce_ok, "const_assert true: ce_ok");
+        CHECK(p.ok, "const_assert true: ce_ok");
         done(&p);
     }
     {
         P p; run(&p, "const_assert 1 + 2 == 3;\n");
-        CHECK(p.ce_ok, "const_assert 1+2==3: ce_ok");
+        CHECK(p.ok, "const_assert 1+2==3: ce_ok");
         done(&p);
     }
 
     /* ── const_assert literal fail ────────────────────────────── */
     {
         P p; run(&p, "const_assert 1 == 2;\n");
-        CHECK(!p.ce_ok, "const_assert 1==2: must error");
+        CHECK(!p.ok, "const_assert 1==2: must error");
         CHECK(has_error_with(&p.diag, "const_assert failed"),
               "const_assert: failure diag");
         done(&p);
@@ -188,7 +202,7 @@ int main(void) {
         P p; run(&p,
             "const WG: u32 = 256u;\n"
             "const_assert WG == 256u;\n");
-        CHECK(p.ce_ok, "const_assert WG==256u: ce_ok");
+        CHECK(p.ok, "const_assert WG==256u: ce_ok");
         done(&p);
     }
 
@@ -198,7 +212,7 @@ int main(void) {
             "fn f(x: i32) {\n"
             "  const_assert x == 0;\n"
             "}\n");
-        CHECK(!p.ce_ok, "fn-param ref in const_assert: must error");
+        CHECK(!p.ok, "fn-param ref in const_assert: must error");
         CHECK(has_error_with(&p.diag, "is not a constant"),
               "fn-param ref: 'is not a constant' diag");
         done(&p);
@@ -207,8 +221,8 @@ int main(void) {
     /* ── const_assert with non-bool condition errors ─────────── */
     {
         P p; run(&p, "const_assert 5;\n");
-        CHECK(!p.ce_ok, "const_assert 5: must error");
-        CHECK(has_error_with(&p.diag, "must evaluate to bool"),
+        CHECK(!p.ok, "const_assert 5: must error");
+        CHECK(has_error_with(&p.diag, "const_assert condition must be a bool"),
               "non-bool const_assert: diag");
         done(&p);
     }
@@ -221,7 +235,7 @@ int main(void) {
             "  const Y = X * 2;\n"
             "  const_assert Y == 6;\n"
             "}\n");
-        CHECK(p.ce_ok, "fn-scope const: ce_ok");
+        CHECK(p.ok, "fn-scope const: ce_ok");
         const WGSLValue *vy = fn_value_of(&p, "Y");
         CHECK(vy && vy->u.i == 6, "fn Y == 6");
         done(&p);
@@ -235,7 +249,7 @@ int main(void) {
             "  const M = N + 1u;\n"
             "  const_assert M == 5u;\n"
             "}\n");
-        CHECK(p.ce_ok, "fn-scope referencing module const: ce_ok");
+        CHECK(p.ok, "fn-scope referencing module const: ce_ok");
         done(&p);
     }
 
@@ -244,7 +258,7 @@ int main(void) {
         P p; run(&p,
             "override SCALE: f32 = 1.0;\n"
             "const_assert true;\n");
-        CHECK(p.ce_ok, "override + const_assert: ce_ok");
+        CHECK(p.ok, "override + const_assert: ce_ok");
         const WGSLValue *vs = value_of(&p, "SCALE");
         CHECK(vs == NULL,
               "override: no cached value in v1 (deferred to pipeline-time)");
@@ -261,12 +275,219 @@ int main(void) {
         done(&p);
     }
 
+    /* ── §15.7.7 FP builtin domains in const-eval ───────────── */
+    {
+        P p; run(&p, "const R = sqrt(4.0);\n");
+        CHECK(p.ok, "sqrt(4.0): const-eval ok");
+        const WGSLValue *v = value_of(&p, "R");
+        CHECK(v && v->kind == WGSL_VAL_FLOAT, "sqrt result: float");
+        CHECK(v && v->u.f == 2.0, "sqrt result: 2.0");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R: f32 = log2(8.0);\n");
+        CHECK(p.ok, "log2(8.0): typed const-eval ok");
+        const WGSLValue *v = value_of(&p, "R");
+        CHECK(v && v->kind == WGSL_VAL_FLOAT && v->type == p.types.t_f32,
+              "log2 result: f32");
+        CHECK(v && v->u.f == 3.0, "log2 result: 3.0");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = sqrt(vec2<f32>(4.0, 9.0));\n");
+        CHECK(p.ok, "sqrt(vec2<f32>): const-eval ok");
+        const WGSLValue *v = value_of(&p, "R");
+        CHECK(v && v->kind == WGSL_VAL_VEC && v->u.agg.count == 2,
+              "sqrt vec result: vec2");
+        CHECK(v && v->u.agg.elems[0].kind == WGSL_VAL_FLOAT &&
+              v->u.agg.elems[0].u.f == 2.0 &&
+              v->u.agg.elems[1].u.f == 3.0,
+              "sqrt vec result values");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = log(vec2f(1.0, 2.0));\n");
+        CHECK(p.ok, "log(vec2f): alias vector constructor folds");
+        const WGSLValue *v = value_of(&p, "R");
+        CHECK(v && v->kind == WGSL_VAL_VEC && v->type &&
+              v->type->kind == WGSL_TYPE_VEC && v->type->width == 2,
+              "log vec alias result: vec2");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = sqrt(-1.0);\n");
+        CHECK(!p.ok, "sqrt(-1.0): must error");
+        CHECK(has_error_with(&p.diag, "builtin 'sqrt' domain error"),
+              "sqrt domain diag");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = log(0.0);\n");
+        CHECK(!p.ok, "log(0.0): must error");
+        CHECK(has_error_with(&p.diag, "builtin 'log' domain error"),
+              "log domain diag");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = acos(2.0);\n");
+        CHECK(!p.ok, "acos(2.0): must error");
+        CHECK(has_error_with(&p.diag, "builtin 'acos' domain error"),
+              "acos domain diag");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = sqrt(vec2<f32>(-1.0, 1.0));\n");
+        CHECK(!p.ok, "sqrt(vec2 negative component): must error");
+        CHECK(has_error_with(&p.diag, "builtin 'sqrt' domain error"),
+              "sqrt vec domain diag");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = atanh(vec2f(0.0, 1.0));\n");
+        CHECK(!p.ok, "atanh(vec2 boundary component): must error");
+        CHECK(has_error_with(&p.diag, "builtin 'atanh' domain error"),
+              "atanh vec domain diag");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = sqrt(abs(-4.0));\n");
+        CHECK(p.ok, "sqrt(abs(-4.0)): fold-through ok");
+        const WGSLValue *v = value_of(&p, "R");
+        CHECK(v && v->kind == WGSL_VAL_FLOAT && v->u.f == 2.0,
+              "sqrt(abs(-4.0)): result 2.0");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = log(max(1.0, 0.0));\n");
+        CHECK(p.ok, "log(max(1.0, 0.0)): fold-through ok");
+        const WGSLValue *v = value_of(&p, "R");
+        CHECK(v && v->kind == WGSL_VAL_FLOAT && v->u.f == 0.0,
+              "log(max(1.0, 0.0)): result 0.0");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = sqrt(min(-1.0, 2.0));\n");
+        CHECK(!p.ok, "sqrt(min(-1.0, 2.0)): must error");
+        CHECK(has_error_with(&p.diag, "builtin 'sqrt' domain error"),
+              "sqrt(min(...)): domain diag");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = pow(-1.0, 2.0);\n");
+        CHECK(!p.ok, "pow(-1.0, 2.0): must error");
+        CHECK(has_error_with(&p.diag, "builtin 'pow' domain error"),
+              "pow domain diag");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = clamp(2.0, 3.0, 1.0);\n");
+        CHECK(!p.ok, "clamp low>high: must error");
+        CHECK(has_error_with(&p.diag, "builtin 'clamp' domain error"),
+              "clamp domain diag");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = quantizeToF16(70000.0f);\n");
+        CHECK(!p.ok, "quantizeToF16 out of f16 range: must error");
+        CHECK(has_error_with(&p.diag, "builtin 'quantizeToF16' domain error"),
+              "quantizeToF16 domain diag");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = length(vec2f(3.0, 4.0));\n");
+        CHECK(p.ok, "length(vec2f): fold-through ok");
+        const WGSLValue *v = value_of(&p, "R");
+        CHECK(v && v->kind == WGSL_VAL_FLOAT && v->u.f == 5.0,
+              "length(vec2f): result 5.0");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = normalize(vec2f(0.0, 0.0));\n");
+        CHECK(!p.ok, "normalize zero vector: must error");
+        CHECK(has_error_with(&p.diag, "builtin 'normalize' domain error"),
+              "normalize zero-vector diag");
+        done(&p);
+    }
+    {
+        P p; run(&p,
+            "const R = mix(vec2f(0.0, 2.0), vec2f(10.0, 6.0), 0.5);\n");
+        CHECK(p.ok, "mix(vec2f, scalar factor): fold-through ok");
+        const WGSLValue *v = value_of(&p, "R");
+        CHECK(v && v->kind == WGSL_VAL_VEC && v->u.agg.count == 2,
+              "mix result: vec2");
+        CHECK(v && v->u.agg.elems[0].u.f == 5.0 &&
+              v->u.agg.elems[1].u.f == 4.0,
+              "mix result values");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = ldexp(1.0, 2000);\n");
+        CHECK(!p.ok, "ldexp exponent too large: must error");
+        CHECK(has_error_with(&p.diag, "builtin 'ldexp' domain error"),
+              "ldexp domain diag");
+        done(&p);
+    }
+
+    /* ── Aggregate constructors + access fold-through ─────────── */
+    {
+        P p; run(&p,
+            "const V = vec2(0xffffffffff, 0xfffffffff0);\n"
+            "const_assert V.x == 0xffffffffff;\n"
+            "const_assert V.y == 0xfffffffff0;\n");
+        CHECK(p.ok, "inferred vec2<AbstractInt> + swizzle const_assert");
+        const WGSLValue *v = value_of(&p, "V");
+        CHECK(v && v->kind == WGSL_VAL_VEC && v->u.agg.count == 2,
+              "V: vec2 aggregate");
+        done(&p);
+    }
+    {
+        P p; run(&p,
+            "const A = array(0xffffffffff, 0xfffffffff0);\n"
+            "const_assert A[0] == 0xffffffffff;\n"
+            "const_assert A[1] == 0xfffffffff0;\n");
+        CHECK(p.ok, "inferred array<AbstractInt,2> + index const_assert");
+        const WGSLValue *v = value_of(&p, "A");
+        CHECK(v && v->kind == WGSL_VAL_ARRAY && v->u.agg.count == 2,
+              "A: array aggregate");
+        done(&p);
+    }
+    {
+        P p; run(&p,
+            "struct S { x : u32, y : vec2i }\n"
+            "const S0 : S = S(1, vec2i(2, 3));\n"
+            "const_assert S0.x == 1u;\n"
+            "const_assert S0.y.y == 3i;\n");
+        CHECK(p.ok, "struct constructor + member const_assert");
+        const WGSLValue *v = value_of(&p, "S0");
+        CHECK(v && v->kind == WGSL_VAL_STRUCT && v->u.agg.count == 2,
+              "S0: struct aggregate");
+        done(&p);
+    }
+    {
+        P p; run(&p,
+            "const M = mat2x2(1.0, 2.0, 3.0, 4.0);\n"
+            "const_assert all(M[1] == vec2(3.0, 4.0));\n");
+        CHECK(p.ok, "inferred matrix + vector comparison + all");
+        const WGSLValue *v = value_of(&p, "M");
+        CHECK(v && v->kind == WGSL_VAL_MAT && v->u.agg.count == 4,
+              "M: mat2x2 aggregate");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const R = all(vec2(1) == vec2u(1u));\n");
+        CHECK(p.ok, "all(vec<bool>) fold-through ok");
+        const WGSLValue *v = value_of(&p, "R");
+        CHECK(v && v->kind == WGSL_VAL_BOOL && v->u.b,
+              "all result: true");
+        done(&p);
+    }
+
     /* ── Mixing types in a typed const ────────────────────────── */
     {
         P p; run(&p, "const N: i32 = 1u + 1u;\n");
         /* Unsigned + unsigned can't materialise to i32 (no implicit
          * concrete-to-concrete conversion). */
-        CHECK(!p.ce_ok, "i32 = u32 expr: must error");
+        CHECK(!p.ok, "i32 = u32 expr: must error");
         done(&p);
     }
 

@@ -100,6 +100,28 @@ int main(void) {
         wgsl_free(r);
     }
 
+    /* ── Text encoding errors are diagnosed even inside comments ── */
+    {
+        const char src[] = "/""/ bad utf8: \xFF\nfn f() {}\n";
+        WGSLResult *r = wgsl_check_n(src, sizeof src - 1);
+        CHECK(r != NULL, "invalid UTF-8 comment: non-NULL result");
+        CHECK(wgsl_ok(r) == 0, "invalid UTF-8 comment: ok = 0");
+        CHECK(strstr(wgsl_error(r), "invalid UTF-8") != NULL,
+              "invalid UTF-8 comment: diagnostic mentions UTF-8");
+        wgsl_free(r);
+    }
+
+#if SIZE_MAX > UINT32_MAX
+    /* ── Oversized source is rejected before uint32 span truncation ─ */
+    {
+        WGSLResult *r = wgsl_check_n(NULL, (size_t)UINT32_MAX + 1u);
+        CHECK(r != NULL, "oversized source: error result");
+        CHECK(wgsl_ok(r) == 0, "oversized source: ok = 0");
+        CHECK(wgsl_diagnostic_count(r) >= 1, "oversized source: diag emitted");
+        wgsl_free(r);
+    }
+#endif
+
     /* ── Resolve error ────────────────────────────────────────── */
     {
         WGSLResult *r = wgsl_check("fn f() { _ = ghost; }\n");

@@ -11,24 +11,30 @@
 #define WGSL_DIAG_INITIAL_CAPACITY 8
 
 void wgsl_diag_init(WGSLDiagBag *b) {
-    b->items       = NULL;
-    b->count       = 0;
-    b->capacity    = 0;
-    b->error_count = 0;
+    b->items        = NULL;
+    b->count        = 0;
+    b->capacity     = 0;
+    b->error_count  = 0;
+    b->filter_count = 0;
+    b->scope_depth  = 0;
     wgsl_arena_init(&b->msg_arena);
 }
 
 void wgsl_diag_destroy(WGSLDiagBag *b) {
     free(b->items);
-    b->items       = NULL;
-    b->count       = 0;
-    b->capacity    = 0;
-    b->error_count = 0;
+    b->items        = NULL;
+    b->count        = 0;
+    b->capacity     = 0;
+    b->error_count  = 0;
+    b->filter_count = 0;
+    b->scope_depth  = 0;
     wgsl_arena_destroy(&b->msg_arena);
 }
 
 static int wgsl_diag_grow(WGSLDiagBag *b) {
+    if (b->capacity > SIZE_MAX / 2) return 0;
     size_t new_cap = b->capacity == 0 ? WGSL_DIAG_INITIAL_CAPACITY : b->capacity * 2;
+    if (new_cap > SIZE_MAX / sizeof *b->items) return 0;
     WGSLDiagnostic *grown = (WGSLDiagnostic *)realloc(
         b->items, new_cap * sizeof *grown);
     if (!grown) return 0;
@@ -39,6 +45,7 @@ static int wgsl_diag_grow(WGSLDiagBag *b) {
 
 static const char *wgsl_diag_intern(WGSLDiagBag *b, const char *src, size_t len) {
     /* +1 for terminating NUL */
+    if (len == SIZE_MAX) return NULL;
     char *dst = (char *)wgsl_arena_alloc_aligned(&b->msg_arena, len + 1, 1);
     if (!dst) return NULL;
     if (len) memcpy(dst, src, len);
@@ -55,6 +62,28 @@ int wgsl_diag_emit_at(
     const char *rule,
     const char *fmt, ...)
 {
+    /* §2.3 / §4.2: apply diagnostic filters.  Walk from the most
+     * recently added filter (innermost scope) to the first, so
+     * per-function @diagnostic overrides global diagnostic().
+     * When a filter matches:
+     *   - severity 0 ("off"): discard the diagnostic entirely.
+     *   - otherwise: replace severity with the filter's value. */
+    if (rule && *rule) {
+        for (int i = b->filter_count - 1; i >= 0; i--) {
+            if (b->filters[i].rule &&
+                strcmp(b->filters[i].rule, rule) == 0)
+            {
+                int filt_sev = (int)b->filters[i].severity;
+                if (filt_sev == 0) {
+                    /* "off" — suppress entirely. */
+                    return 1;
+                }
+                severity = (WGSLDiagSeverity)filt_sev;
+                break;  /* innermost match wins */
+            }
+        }
+    }
+
     if (b->count == b->capacity) {
         if (!wgsl_diag_grow(b)) return 0;
     }
@@ -101,8 +130,16 @@ int wgsl_diag_emit_at(
     /* Translate offset → 1-based (line, col). */
     uint32_t line = 1, col = 1, end_line = 1, end_col = 1;
     if (src) {
-        wgsl_source_offset_to_line_col(src, span_offset, &line, &col);
-        wgsl_source_offset_to_line_col(src, span_offset + span_length, &end_line, &end_col);
+        uint32_t src_len = src->length > UINT32_MAX
+            ? UINT32_MAX
+            : (uint32_t)src->length;
+        uint32_t span_start = span_offset > src_len ? src_len : span_offset;
+        uint32_t span_end = span_offset > UINT32_MAX - span_length
+            ? UINT32_MAX
+            : span_offset + span_length;
+        if (span_end > src_len) span_end = src_len;
+        wgsl_source_offset_to_line_col(src, span_start, &line, &col);
+        wgsl_source_offset_to_line_col(src, span_end, &end_line, &end_col);
     }
 
     WGSLDiagnostic *d = &b->items[b->count++];
@@ -129,4 +166,31 @@ const WGSLDiagnostic *wgsl_diag_at(const WGSLDiagBag *b, size_t idx) {
 
 int wgsl_diag_has_error(const WGSLDiagBag *b) {
     return b ? (b->error_count > 0) : 0;
+}
+
+void wgsl_diag_set_filter(
+    WGSLDiagBag *b, const char *rule, size_t rule_len,
+    int severity)
+{
+    if (!b || !rule || rule_len == 0) return;
+    if (b->filter_count >= WGSL_DIAG_FILTER_MAX) return;
+
+    const char *interned = wgsl_diag_intern(b, rule, rule_len);
+    if (!interned) return;
+
+    b->filters[b->filter_count].rule     = interned;
+    b->filters[b->filter_count].severity = (WGSLDiagSeverity)severity;
+    b->filter_count++;
+}
+
+void wgsl_diag_push_scope(WGSLDiagBag *b) {
+    if (!b) return;
+    if (b->scope_depth >= WGSL_DIAG_SCOPE_MAX) return;
+    b->scope_stack[b->scope_depth++] = b->filter_count;
+}
+
+void wgsl_diag_pop_scope(WGSLDiagBag *b) {
+    if (!b) return;
+    if (b->scope_depth <= 0) return;
+    b->filter_count = b->scope_stack[--b->scope_depth];
 }

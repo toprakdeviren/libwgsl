@@ -1,7 +1,7 @@
 /**
  * @file consteval.h — WGSL const-expression evaluator.
  *
- * Phase 6 v1 deliberately caps what the spec demands at *shader-creation
+ * Phase 6 v1 deliberately caps what the spec demands at *shader-generation
  * time* (per `PLAN.md` §6 risk register / `DESIGN.md` rev 1):
  *
  *   - `const NAME = expr;`       (§7.2)  must const-eval
@@ -9,11 +9,15 @@
  *   - `const_assert <expr>;`     (§10.1) must eval to literal `true`
  *   - template-arg const-expr   (e.g. `array<f32, N>`)
  *   - abstract→concrete materialization (§6.2.1)
+ *   - scalar + vector FP builtin-call domains for §15.7.7, including
+ *     fold-through for common @const numeric builtins (`abs`, `min`,
+ *     `max`, `mix`, `ldexp`, `length`, `normalize`, etc.)
  *
  * **Out of scope for v1** (postponed to v1.x):
  *   - user-defined `const fn` graph evaluation (§11.3)
  *   - memoising const-call evaluator
- *   - SPIR-V/runtime-required `extractBits` etc. fold-through-builtins
+ *   - full aggregate / matrix constructors and SPIR-V/runtime-required
+ *     bitfield / pack-unpack builtins
  *
  * The evaluator runs after the resolver (Phase 5).  It uses every
  * `EXPR_IDENT`'s resolved `WGSLSymbol *` (stashed in `payload[2]`) to
@@ -21,7 +25,9 @@
  *
  * Successful evaluation of a `DECL_CONST` / `DECL_OVERRIDE` populates
  * a side-table keyed by `WGSLSymbol *` so later uses (in template args,
- * other consts, `const_assert`) can fetch the value back.
+ * other consts, `const_assert`) can fetch the value back.  Untyped
+ * `const` values keep their abstract numeric type; materialization is
+ * performed only for typed consts here, or later by the consuming context.
  */
 #ifndef WGSL_INTERNAL_CONSTEVAL_H
 #define WGSL_INTERNAL_CONSTEVAL_H
@@ -47,6 +53,8 @@ typedef enum {
     WGSL_VAL_FLOAT,      /* AbstractFloat / f32 / f16 — interpret with `type` */
     WGSL_VAL_VEC,        /* `agg.count` elems = type width                  */
     WGSL_VAL_MAT,        /* `agg.count` elems = cols * rows (column-major)  */
+    WGSL_VAL_ARRAY,      /* `agg.count` elems = array length                */
+    WGSL_VAL_STRUCT,     /* `agg.count` elems = struct member count         */
 } WGSLValKind;
 
 typedef struct WGSLValue {
