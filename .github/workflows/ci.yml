@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hygiene:
+    name: Generated files and diff hygiene
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show tool versions
+        run: |
+          python3 --version
+          make --version | head -n 1
+
+      - name: Generated builtin tables are current
+        run: |
+          make gen-builtins
+          git diff --exit-code -- \
+            src/check/builtins.gen.h \
+            src/builtins.names.gen.h
+
+      - name: Diff hygiene
+        run: git diff --check
+
+  linux-compile:
+    name: Linux compile smoke
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show tool versions
+        run: |
+          cc --version | head -n 1
+          ar --version | head -n 1
+          make --version | head -n 1
+
+      - name: Build static archive
+        run: |
+          make clean
+          make lib
+
+  macos-native:
+    name: macOS native tests
+    runs-on: macos-latest
+
+    env:
+      CC: clang
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show tool versions
+        run: |
+          uname -a
+          clang --version | head -n 1
+          make --version | head -n 1
+          file vendor/unicode/libunicode.native.a
+
+      # Full link/test currently runs on macOS because the vendored
+      # native Unicode archive is a Mach-O arm64 static library.
+      - name: Unit tests
+        run: |
+          make clean
+          make test
+
+      - name: CLI smoke
+        run: make test-cli
+
+      - name: Embedder example
+        run: make example-embedder

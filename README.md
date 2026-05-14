@@ -1,5 +1,7 @@
 # libwgsl
 
+[![CI](https://github.com/toprakdeviren/libwgsl/actions/workflows/ci.yml/badge.svg)](https://github.com/toprakdeviren/libwgsl/actions/workflows/ci.yml)
+
 > A from-scratch C99 frontend for the
 > [W3C WebGPU Shading Language](https://www.w3.org/TR/WGSL/) — lex,
 > parse, resolve, const-eval, type-check, validate.  No dependencies
