@@ -91,11 +91,11 @@ static void expect_reject(const char *src, const char *needle,
 }
 
 int main(void) {
-    /* ═══════════════════════════════════════════════════════════════
+    /*
      *  §4.1.1 — Enable Extensions: builtin gating
-     * ═══════════════════════════════════════════════════════════════ */
+     */
 
-    /* ── clip_distances builtin gated behind `enable clip_distances;` ── *
+    /* clip_distances builtin gated behind `enable clip_distances;`.
      * `clip_distances` is a vertex output per §13.3.1.1, so we exercise *
      * the enable gate through a struct return that also carries        *
      * `@builtin(position)` (mandatory on a vertex entry point).        */
@@ -120,7 +120,7 @@ int main(void) {
         "requires 'enable clip_distances;'",
         "§4.1.1: @builtin(clip_distances) rejected without enable");
 
-    /* ── primitive_index builtin gated behind `enable primitive_index;` ── */
+    /* primitive_index builtin gated behind `enable primitive_index;`. */
     expect_ok(
         "enable primitive_index;\n"
         "@fragment fn fs(@builtin(primitive_index) pidx: u32) -> "
@@ -136,7 +136,7 @@ int main(void) {
         "requires 'enable primitive_index;'",
         "§4.1.1: @builtin(primitive_index) rejected without enable");
 
-    /* ── subgroup builtins gated behind `enable subgroups;` ── */
+    /* subgroup builtins gated behind `enable subgroups;`. */
     expect_ok(
         "enable subgroups;\n"
         "@fragment fn fs(@builtin(subgroup_invocation_id) sid: u32) -> "
@@ -152,7 +152,7 @@ int main(void) {
         "requires 'enable subgroups;'",
         "§4.1.1: @builtin(subgroup_invocation_id) rejected without enable");
 
-    /* ── subgroup FUNCTIONS gated behind `enable subgroups;` ── */
+    /* subgroup FUNCTIONS gated behind `enable subgroups;`. */
     expect_ok(
         "enable subgroups;\n"
         "@compute @workgroup_size(64)\n"
@@ -184,7 +184,7 @@ int main(void) {
         "requires 'enable subgroups;'",
         "§4.1.1: subgroupElect() rejected without enable subgroups");
 
-    /* ── quad functions gated behind `enable subgroups;` ── */
+    /* quad functions gated behind `enable subgroups;`. */
     expect_ok(
         "enable subgroups;\n"
         "@compute @workgroup_size(64)\n"
@@ -240,9 +240,9 @@ int main(void) {
         "}\n",
         "§4.1.1: all subgroup+quad fns accepted with enable subgroups");
 
-    /* ═══════════════════════════════════════════════════════════════
+    /*
      *  §4.1.2 — Language Extensions: `immediate_data`
-     * ═══════════════════════════════════════════════════════════════ */
+     */
 
     /* `var<immediate>` should now resolve (address space is predeclared) */
     expect_ok(
@@ -257,9 +257,9 @@ int main(void) {
         "var<immediate> x: u32;\n",
         "§4.1.2: var<immediate> resolves (AS is predeclared)");
 
-    /* ═══════════════════════════════════════════════════════════════
+    /*
      *  §4.2 — Global Diagnostic Filter: rule name validation
-     * ═══════════════════════════════════════════════════════════════ */
+     */
 
     /* Directive form — known good (already tested in
      * test_context_names_conformance.c, re-pin here for coverage). */
@@ -308,9 +308,9 @@ int main(void) {
         }
     }
 
-    /* ═══════════════════════════════════════════════════════════════
+    /*
      *  §4.2 — Global Diagnostic Filter: application to diagnostics
-     * ═══════════════════════════════════════════════════════════════ */
+     */
 
     /* A divergent workgroupBarrier() emits a derivative_uniformity diagnostic
      * by default (warning). */

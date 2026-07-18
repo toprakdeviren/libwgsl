@@ -244,6 +244,27 @@
         done(&p);
     }
     {
+        /* §9.4.8 — the continuing-uses set must grow past its old fixed cap
+         * of 8.  Here 8 referenced decls precede the `continue` and only the
+         * 9th (a8) is declared after it, so the error is surfaced only if a8
+         * is tracked — which a fixed 8-entry set would have dropped. */
+        P p; run(&p,
+            "fn f() {\n"
+            "  loop {\n"
+            "    let a0=0; let a1=0; let a2=0; let a3=0;\n"
+            "    let a4=0; let a5=0; let a6=0; let a7=0;\n"
+            "    if (true) { continue; }\n"
+            "    let a8=0;\n"
+            "    continuing { let y = a0+a1+a2+a3+a4+a5+a6+a7+a8;"
+            " break if true; }\n"
+            "  }\n"
+            "}\n");
+        CHECK(!p.ok, "continue before 9th referenced decl: must error");
+        CHECK(has_error_with(&p.diag, "would re-enter the loop's continuing block"),
+              "continue-past-decl (>8 uses) diag");
+        done(&p);
+    }
+    {
         /* §9.4.8 — continue AFTER the decl is fine. */
         P p; run(&p,
             "fn f() {\n"

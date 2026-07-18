@@ -21,9 +21,24 @@
  * desugaring, assignment lattice, expression lattice, and call-site
  * requirements.  §15.2.9 full-AST annotation remains a tooling breadth
  * improvement rather than an accept/reject gap.
+ *
+ * AST-WRITE CONTRACT: this pass is the ONLY validator pass that writes to
+ * the AST, and it writes EXACTLY three §15.2.9 analyzer-annotation bits into
+ * `WGSLNode.flags` (never structure, children, spans, types, or any other
+ * field):
+ *   - WGSL_FLAG_DIVERGENT_CF     — per stmt/expr node (check_uniformity_block)
+ *   - WGSL_FLAG_NONUNIFORM       — per expr node    (analyze_uniform_expr)
+ *   - WGSL_FLAG_SUBGROUP_UNIFORM — per expr node    (analyze_uniform_expr)
+ * These are tooling annotations (IDE/LSP surface the §15.2.9 divergence /
+ * (sub)uniformity state); they never change accept/reject.  `WGSLNode.flags`
+ * is defined as "bit-packed analyzer state" (ast.h) — so this is legitimate
+ * annotation, NOT a violated "validate never mutates the AST" invariant.
+ * Call-site consumers: `uniform_expr_is_subgroup_uniform` (state.c) reads
+ * NONUNIFORM/SUBGROUP_UNIFORM back; keep this contract in sync if bits move.
  */
 #include "internal/validate.h"
 #include "internal/validate_priv.h"
+#include "internal/uniformity_priv.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -57,37 +72,19 @@
  *
  * Post-init assignments are tracked through sequential statements,
  * partial/full assignment distinction, branches, and loop/switch joins. */
-typedef struct {
-    WGSLValidator *v;
-    const uint8_t *param_nonuniform;
-    size_t         nsyms;
-    int            init_depth;
-    uint8_t       *sym_uniform;
-    uint8_t       *sym_known;
-} UniformCtx;
-
-static int is_uniform_expr(UniformCtx *cx, WGSLNode *n);
-static int analyze_uniform_expr(
+/* UniformCtx: uniformity_priv.h */
+int is_uniform_expr(UniformCtx *cx, WGSLNode *n);
+int analyze_uniform_expr(
     UniformCtx *cx, WGSLNode *n, int is_divergent,
     const uint32_t *fn_reqs);
-static WGSLSymbol *call_user_fn_sym(WGSLNode *call);
-static void check_uniformity_block(
+WGSLSymbol *call_user_fn_sym(WGSLNode *call);
+void check_uniformity_block(
     UniformCtx *cx, WGSLNode *n, int is_divergent,
     const uint32_t *fn_reqs);
-static WGSLSymbol *uniform_memory_root(WGSLNode *n, int depth);
-static int uniform_param_builtin_is_uniform(UniformCtx *cx, WGSLSymbol *sym);
-static int uniform_param_builtin_is_subgroup_uniform(UniformCtx *cx, WGSLSymbol *sym);
-static int uniform_module_var_is_readonly(const WGSLSymbol *sym);
-static int parameter_is_uniform(UniformCtx *cx, WGSLSymbol *sym);
+WGSLSymbol *uniform_memory_root(WGSLNode *n, int depth);
+int uniform_param_builtin_is_uniform(UniformCtx *cx, WGSLSymbol *sym);
+int uniform_param_builtin_is_subgroup_uniform(UniformCtx *cx, WGSLSymbol *sym);
+int uniform_module_var_is_readonly(const WGSLSymbol *sym);
+int parameter_is_uniform(UniformCtx *cx, WGSLSymbol *sym);
 
-enum {
-    UD_NONE      = 0,
-    UD_WORKGROUP = 1u << 0,
-    UD_SUBGROUP  = 1u << 1,
-    UD_ALL       = UD_WORKGROUP | UD_SUBGROUP,
-};
-
-
-#include "uniformity/state_behavior.inc"
-#include "uniformity/calls_exprs.inc"
-#include "uniformity/pointers_block.inc"
+/* UD_* : uniformity_priv.h */

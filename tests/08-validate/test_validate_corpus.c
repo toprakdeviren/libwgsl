@@ -1,5 +1,5 @@
 /**
- * Phase 8 Iter A — validator across the real shader corpus.
+ * Validator coverage across the real shader corpus.
  *
  * Engine-style harness (mirrors test_resolver_corpus / test_consteval_
  * corpus / test_check_corpus): prepend `_shared.wgsl`, split each
@@ -8,7 +8,7 @@
  * on each kernel section, and gate on zero ERROR diagnostics per
  * section.
  *
- * Iter A's validator surface (5 cycle families) must accept every
+ * The validator's cycle-detection surface must accept every
  * real-world shader without false positives.
  */
 #include "internal/lexer.h"
@@ -193,6 +193,17 @@ static void run_file(
 }
 
 int main(void) {
+    {
+        DIR *_d = opendir(SHADERS_DIR);
+        if (!_d) {
+            fprintf(stderr, "SKIP  %s: %s not present — VACUOUS (no corpus coverage; not a real pass)\n",
+                    __FILE__, SHADERS_DIR);
+            printf("PASS  corpus  VACUOUS (no %s)\n", SHADERS_DIR);
+            return 0;
+        }
+        closedir(_d);
+    }
+
     wgsl_utf8_init();
 
     size_t shared_len = 0;

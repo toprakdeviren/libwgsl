@@ -1,5 +1,5 @@
 /**
- * Phase 9 Iter A — public C API foundation.
+ * Public C API foundation tests.
  *
  * Covers:
  *   - process lifecycle: wgsl_init / wgsl_shutdown / wgsl_spec_pin /
@@ -16,8 +16,8 @@
  *   - wgsl_diagnostic returns a stable pointer with LSP-shape
  *     line/column/end_line/end_column
  *   - wgsl_lex / wgsl_lex_free emit raw tokens with kind classification
- *   - wgsl_module_json / wgsl_hover_at / wgsl_definition_at stubs
- *     return defined "absent" values (Iter B / C will fill in)
+ *   - wgsl_module_json / wgsl_hover_at / wgsl_definition_at return
+ *     defined "absent" values when the requested data is unavailable
  */
 #include "wgsl.h"
 
@@ -35,7 +35,7 @@ static int fail = 0;
 } while (0)
 
 int main(void) {
-    /* ── Process lifecycle ────────────────────────────────────── */
+    /* Process lifecycle. */
     wgsl_init();
     CHECK(wgsl_spec_pin() != NULL, "spec pin non-NULL");
     CHECK(strcmp(wgsl_spec_pin(), WGSL_SPEC_PIN) == 0, "spec pin matches macro");
@@ -43,7 +43,7 @@ int main(void) {
     CHECK(strcmp(wgsl_unicode_version(), "17.0.0") == 0,
           "unicode version is 17.0.0");
 
-    /* ── NULL safety ───────────────────────────────────────────── */
+    /* NULL safety. */
     CHECK(wgsl_ok(NULL) == 0, "wgsl_ok(NULL) → 0");
     CHECK(wgsl_diagnostic_count(NULL) == 0, "diag_count(NULL) → 0");
     CHECK(wgsl_diagnostic(NULL, 0) == NULL, "diagnostic(NULL,0) → NULL");
@@ -51,7 +51,7 @@ int main(void) {
     CHECK(wgsl_error(NULL)[0] == '\0', "error(NULL) is empty string");
     wgsl_free(NULL);  /* must not crash */
 
-    /* ── Empty source ─────────────────────────────────────────── */
+    /* Empty source. */
     {
         WGSLResult *r = wgsl_check("");
         CHECK(r != NULL, "empty src: non-NULL result");
@@ -61,7 +61,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── NULL source ──────────────────────────────────────────── */
+    /* NULL source. */
     {
         WGSLResult *r = wgsl_check(NULL);
         CHECK(r != NULL, "NULL src: non-NULL result");
@@ -69,7 +69,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── Simple valid shader ──────────────────────────────────── */
+    /* Simple valid shader. */
     {
         const char *src =
             "@compute @workgroup_size(64)\n"
@@ -83,7 +83,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── Parse error ──────────────────────────────────────────── */
+    /* Parse error. */
     {
         WGSLResult *r = wgsl_check("fn { }");
         CHECK(wgsl_ok(r) == 0, "parse error: ok = 0");
@@ -100,7 +100,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── Text encoding errors are diagnosed even inside comments ── */
+    /* Text encoding errors are diagnosed even inside comments. */
     {
         const char src[] = "/""/ bad utf8: \xFF\nfn f() {}\n";
         WGSLResult *r = wgsl_check_n(src, sizeof src - 1);
@@ -112,7 +112,7 @@ int main(void) {
     }
 
 #if SIZE_MAX > UINT32_MAX
-    /* ── Oversized source is rejected before uint32 span truncation ─ */
+    /* Oversized source is rejected before uint32 span truncation. */
     {
         WGSLResult *r = wgsl_check_n(NULL, (size_t)UINT32_MAX + 1u);
         CHECK(r != NULL, "oversized source: error result");
@@ -122,7 +122,7 @@ int main(void) {
     }
 #endif
 
-    /* ── Resolve error ────────────────────────────────────────── */
+    /* Resolve error. */
     {
         WGSLResult *r = wgsl_check("fn f() { _ = ghost; }\n");
         CHECK(wgsl_ok(r) == 0, "resolve err: ok = 0");
@@ -131,7 +131,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── Diagnostic spans are LSP-shape (1-based, end exclusive) — */
+    /* Diagnostic spans are LSP-shape (1-based, end exclusive). */
     {
         const char *src = "fn f() {\n  let x = ghost;\n}\n";
         WGSLResult *r = wgsl_check(src);
@@ -152,7 +152,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── wgsl_lex emits classified tokens ─────────────────────── */
+    /* wgsl_lex emits classified tokens. */
     {
         const char *src = "let x = 1;";
         WGSLLexToken *tokens = NULL;
@@ -176,7 +176,33 @@ int main(void) {
         wgsl_lex_free(tokens);
     }
 
-    /* ── wgsl_module_json / hover / goto-def absent-result paths — */
+    /* WGSLLexToken.column is UTF-16 (LSP), not byte. */
+    {
+        /* U+00E9 'é' is 2 UTF-8 bytes, 1 UTF-16 unit.  After "é "
+         * (bytes 0..2), `let` starts at byte 3 but UTF-16 column 3. */
+        const char *src = "\xC3\xA9 let x = 1;";
+        WGSLLexToken *tokens = NULL;
+        int count = 0;
+        CHECK(wgsl_lex(src, &tokens, &count) == 1, "utf16 lex: rc");
+        int found = 0;
+        for (int i = 0; i < count; i++) {
+            if (tokens[i].kind == WGSL_LEX_KEYWORD &&
+                tokens[i].length == 3 &&
+                memcmp(src + tokens[i].offset, "let", 3) == 0)
+            {
+                found = 1;
+                CHECK(tokens[i].offset == 3, "utf16 lex: let byte offset 3");
+                /* columns: é(1) space(1) → let at UTF-16 col 3.
+                 * Byte column would be 4 (é takes 2 bytes). */
+                CHECK(tokens[i].column == 3, "utf16 lex: let column 3 (not byte 4)");
+                CHECK(tokens[i].line == 1, "utf16 lex: line 1");
+            }
+        }
+        CHECK(found, "utf16 lex: found let keyword");
+        wgsl_lex_free(tokens);
+    }
+
+    /* wgsl_module_json / hover / goto-def absent-result paths. */
     {
         WGSLResult *r = wgsl_check("fn f() {}\n");
         CHECK(wgsl_module_json(r) != NULL, "module_json non-NULL");
@@ -191,7 +217,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── wgsl_check_n (non-NUL-terminated) ───────────────────── */
+    /* wgsl_check_n (non-NUL-terminated). */
     {
         const char src_buf[] = "fn x()" "GARBAGE";
         WGSLResult *r = wgsl_check_n(src_buf, 6);   /* "fn x()" */

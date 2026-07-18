@@ -89,7 +89,7 @@ static void expect_reject(const char *src, const char *needle,
 }
 
 int main(void) {
-    /* ── §3.8.5 — enable extension names ───────────────────────── */
+    /* §3.8.5 - enable extension names. */
     {
         const char *names[] = {
             "f16",
@@ -113,7 +113,7 @@ int main(void) {
                   "unknown extension",
                   "§3.8.5: `enable f17;` rejected (off-by-one near 'f16')");
 
-    /* ── §3.8.5 — language extension names ─────────────────────── */
+    /* §3.8.5 - language extension names. */
     {
         const char *names[] = {
             "readonly_and_readwrite_storage_textures",
@@ -143,7 +143,7 @@ int main(void) {
                   "unknown language feature",
                   "§3.8.5: typo near 'immediate_data' rejected");
 
-    /* ── §3.8.3 — diagnostic rule names ────────────────────────── */
+    /* §3.8.3 - diagnostic rule names. */
     expect_ok("diagnostic(off, derivative_uniformity);\n",
               "§3.8.3: diagnostic(_, derivative_uniformity) accepted");
     expect_ok("diagnostic(off, subgroup_uniformity);\n",
@@ -160,7 +160,7 @@ int main(void) {
     expect_ok("diagnostic(off, vendor.foo);\n",
               "§3.8.3: unrecognized multi-token rule silently accepted");
 
-    /* ── §3.8.6 — interpolation type names ─────────────────────── *
+    /* §3.8.6 - interpolation type names.
      *                                                             *
      * `@interpolate` lives on entry-point I/O.  We exercise the    *
      * names on a fragment input slot — that path doesn't pull in   *
@@ -189,7 +189,7 @@ int main(void) {
         "unknown interpolation type",
         "§3.8.6: typo @interpolate(prespective) rejected");
 
-    /* ── §3.8.7 — interpolation sampling names ─────────────────── */
+    /* §3.8.7 - interpolation sampling names. */
     {
         /* `sample` requires a perspective/linear interp type for
          * meaningful semantics; `first`/`either` go with `flat`.
@@ -227,7 +227,7 @@ int main(void) {
         "unknown interpolation sampling",
         "§3.8.7: typo near 'first' rejected");
 
-    /* ── §3.8.2 — built-in value names (already enforced) ──────── *
+    /* §3.8.2 - built-in value names (already enforced).
      *                                                             *
      * `@builtin(garbage)` is rejected today (the per-spelling     *
      * name table is in validate.c `kBuiltinTable`).  Pin the      *

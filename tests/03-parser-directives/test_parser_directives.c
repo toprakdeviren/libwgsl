@@ -1,5 +1,5 @@
 /**
- * Phase 3 Round B Iter 2 — directives.
+ * Directive parser tests.
  *
  * Covers:
  *   - enable f16;            (single)
@@ -63,7 +63,7 @@ int main(void) {
         CHECK(p.ok, "enable single: ok");
         const WGSLNode *d = p.ast.root->children[0];
         CHECK(d->kind == WGSL_NODE_DIR_ENABLE, "enable: kind");
-        CHECK((uint32_t)d->payload[0] == 1,    "enable: 1 ext");
+        CHECK(wgsl_dir_name_count(d) == 1,    "enable: 1 ext");
         CHECK(d->child_count == 1,             "enable: 1 child");
         CHECK(span_eq(d->children[0], &p.src, "f16"), "enable: f16");
         done(&p);
@@ -73,7 +73,7 @@ int main(void) {
         P p; run(&p, "enable f16, subgroups, clip_distances;");
         CHECK(p.ok, "enable multi: ok");
         const WGSLNode *d = p.ast.root->children[0];
-        CHECK((uint32_t)d->payload[0] == 3, "enable multi: 3 exts");
+        CHECK(wgsl_dir_name_count(d) == 3, "enable multi: 3 exts");
         CHECK(d->child_count == 3,           "enable multi: 3 children");
         CHECK(span_eq(d->children[1], &p.src, "subgroups"),     "enable: subgroups");
         CHECK(span_eq(d->children[2], &p.src, "clip_distances"), "enable: clip_distances");
@@ -84,7 +84,7 @@ int main(void) {
         P p; run(&p, "enable f16, subgroups,;");
         CHECK(p.ok, "enable trailing-comma: ok");
         const WGSLNode *d = p.ast.root->children[0];
-        CHECK((uint32_t)d->payload[0] == 2, "enable trailing-comma: 2 exts");
+        CHECK(wgsl_dir_name_count(d) == 2, "enable trailing-comma: 2 exts");
         done(&p);
     }
 
@@ -106,7 +106,7 @@ int main(void) {
         CHECK(p.ok, "diagnostic 1-part: ok");
         const WGSLNode *d = p.ast.root->children[0];
         CHECK(d->kind == WGSL_NODE_DIR_DIAGNOSTIC, "diag: kind");
-        CHECK((uint32_t)d->payload[0] == 1,         "diag: 1 rule part");
+        CHECK(wgsl_diag_rule_parts(d) == 1,         "diag: 1 rule part");
         CHECK(d->child_count == 2,                  "diag: 2 children (sev + rule)");
         CHECK(span_eq(d->children[0], &p.src, "off"),                   "diag: severity");
         CHECK(span_eq(d->children[1], &p.src, "derivative_uniformity"), "diag: rule");
@@ -117,7 +117,7 @@ int main(void) {
         P p; run(&p, "diagnostic(warning, ext.subgroup_uniformity);");
         CHECK(p.ok, "diagnostic dotted: ok");
         const WGSLNode *d = p.ast.root->children[0];
-        CHECK((uint32_t)d->payload[0] == 2, "diag dotted: 2 rule parts");
+        CHECK(wgsl_diag_rule_parts(d) == 2, "diag dotted: 2 rule parts");
         CHECK(d->child_count == 3,           "diag dotted: 3 children");
         CHECK(span_eq(d->children[1], &p.src, "ext"),                    "diag dotted: r1");
         CHECK(span_eq(d->children[2], &p.src, "subgroup_uniformity"),    "diag dotted: r2");

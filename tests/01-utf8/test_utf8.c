@@ -1,5 +1,5 @@
 /**
- * Phase 1 — UTF-8 step decoder + Unicode predicates.
+ * UTF-8 step decoder and Unicode predicate tests.
  *
  * Covers:
  *   - 1/2/3/4 byte valid sequences

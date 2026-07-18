@@ -12,7 +12,7 @@
 
 #include "internal/check.h"
 
-/* ── Diagnostics & side-table (check.c) ────────────────────────────── */
+/* Diagnostics & side-table (check.c). */
 
 void wgsl_tc_error(
     WGSLTypeChecker *tc, const WGSLNode *at, const char *fmt, ...);
@@ -26,7 +26,7 @@ WGSLTypeInfo *wgsl_tc_unwrap_ref_type(WGSLTypeInfo *t);
 WGSLSymbol *wgsl_tc_find_decl_symbol(
     const WGSLTypeChecker *tc, const WGSLNode *decl);
 
-/* ── Type-spec resolution (types.c) ──────────────────────────── */
+/* Type-spec resolution (types.c). */
 
 /* Resolve a type-spec AST subtree to a WGSLTypeInfo and record it on
  * the side-table.  NULL on error (with a diagnostic emitted). */
@@ -41,7 +41,7 @@ WGSLAddressSpace wgsl_tc_resolve_addr_space_arg(
 WGSLAccessMode   wgsl_tc_resolve_access_mode_arg(
     WGSLTypeChecker *tc, WGSLNode *arg);
 
-/* ── Init compatibility (decls.c) ────────────────────────────── */
+/* Init compatibility (decls.c). */
 
 /* "Constructible" predicate with struct-recursion (§6.2.12).  The
  * shallow predicate `wgsl_type_is_constructible` short-circuits structs
@@ -66,17 +66,27 @@ void wgsl_tc_check_constexpr_divisor_nonzero(
     WGSLTypeInfo *rhs_type,
     const char *message);
 
-/* Decl typing (decls.c). */
+/* Decl typing (decls_init.c / decls_typing.c). */
+int decl_type_contains_runtime_array(const WGSLTypeChecker *tc, const WGSLTypeInfo *t);
+int decl_type_contains_override_array(const WGSLTypeChecker *tc, const WGSLTypeInfo *t);
+int decl_type_contains_atomic(const WGSLTypeChecker *tc, const WGSLTypeInfo *t);
 int wgsl_tc_type_decl_const_or_let(WGSLTypeChecker *tc, WGSLNode *n);
 int wgsl_tc_type_decl_var         (WGSLTypeChecker *tc, WGSLNode *n);
 int wgsl_tc_type_decl_override    (WGSLTypeChecker *tc, WGSLNode *n);
 int wgsl_tc_type_decl_alias       (WGSLTypeChecker *tc, WGSLNode *n);
 int wgsl_tc_type_decl_struct      (WGSLTypeChecker *tc, WGSLNode *n);
 
-/* ── Expression typing (exprs.c) ─────────────────────────────── */
+/* Expression typing (exprs.c). */
 
-/* Top-level dispatcher; handles every EXPR_* node kind. */
+/* Top-level dispatcher; handles every EXPR_* node kind.
+ * `wgsl_tc_type_expr` is bottom-up (no expected type).
+ * `wgsl_tc_type_expr_exp` is bidirectional (§4.3 / §6.2.1): when
+ * `expected` is a concrete type that the expression's abstract type
+ * converts to, abstract literals and intermediate results materialize
+ * in that context (e.g. `let x: u32 = ~0` / `countOneBits(7)`). */
 int wgsl_tc_type_expr(WGSLTypeChecker *tc, WGSLNode *n);
+int wgsl_tc_type_expr_exp(
+    WGSLTypeChecker *tc, WGSLNode *n, WGSLTypeInfo *expected);
 
 /* Override-expression predicate (§7.2.2 / §15) — needed by walk_stmt
  * for `var<private>` init / @workgroup_size cross-check. */

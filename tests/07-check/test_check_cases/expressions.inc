@@ -140,8 +140,7 @@
     }
     {
         /* Runtime div-by-zero must NOT fire at type-check time
-         * (the consteval noise filter rolls back "not a constant"
-         * for runtime initializers). */
+         * (§A6: soft-eval rolls back WGSL_CEV_NOT_CONST noise). */
         P p; run(&p, "fn f(x: i32, y: i32) { let z = x / y; }\n");
         CHECK(p.ok, "runtime x/y: tc_ok");
         CHECK(!has_error_with(&p.diag, "division by zero"),

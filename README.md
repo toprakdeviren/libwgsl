@@ -2,11 +2,12 @@
 
 [![CI](https://github.com/toprakdeviren/libwgsl/actions/workflows/ci.yml/badge.svg)](https://github.com/toprakdeviren/libwgsl/actions/workflows/ci.yml)
 
-> A from-scratch C99 frontend for the
-> [W3C WebGPU Shading Language](https://www.w3.org/TR/WGSL/) — lex,
-> parse, resolve, const-eval, type-check, validate.  No dependencies
-> outside a vendored Unicode tables archive.  Spec target: **WGSL
-> Recommendation**, Candidate Recommendation Draft of 2026-05-07.
+> A from-scratch C99 library for validating
+> [WGSL](https://www.w3.org/TR/WGSL/), extracting shader interfaces, and
+> powering editor and analysis tools. Native and WebAssembly builds share the
+> same checked semantic core. MSL emission and CPU execution analysis are
+> experimental. Spec profile: **WGSL Candidate Recommendation Draft,
+> 2026-05-07**.
 
 ```c
 #include <wgsl.h>
@@ -22,44 +23,47 @@ wgsl_free(r);
 
 ## What it is
 
-A trustworthy WGSL frontend.  Given a source string, libwgsl returns
-an authoritative "is-this-spec-conformant" verdict, an LSP-grade
-diagnostic stream, semantic tokens for syntax highlighters, and a
-JSON module summary (entry points, resources, struct layouts,
-override IDs).  It does not generate code — Tint and Naga already do
-that, and the validator/AST/diagnostic state we produce flows straight
-into editors and language servers.
+A small, embeddable WGSL frontend and analysis library. Given a source string,
+libwgsl checks it against the pinned WGSL profile and exposes structured
+diagnostics, semantic tokens, editor queries, and a JSON module summary with
+entry points, resources, layouts, overrides, and pipeline information.
+
+The same checked result feeds native applications, WebAssembly clients,
+language servers, reflection tooling, and the experimental execution analyzer.
+Unsupported or partial experimental behavior is reported explicitly instead of
+being presented as a successful full result.
 
 ## What it isn't
 
-- **A backend.** No SPIR-V / MSL / HLSL emission.
+- **A general shader backend.** The MSL emitter is target-focused and
+  best-effort; there is no SPIR-V / HLSL / GLSL backend, and Tint/Naga
+  remain the right production code generators.
 - **A WebGPU runtime.** Pipeline generation, dispatch, and resource
   management belong to the host engine.
-- **A formatter.** Reasonable add-on for v1.x; not on the v1 path.
-- **An incremental compiler.** Every `wgsl_check` runs the full
-  pipeline.  The corpus benchmark says ~0.37 ms / KLoc warm on an
-  M-series CPU, so for the sizes WGSL targets (typically <2 KLoc per
-  module) this is comfortably below the 16 ms frame budget anyway.
+- **A multi-file IDE project system.** WGSL has no imports; the LSP and
+  session APIs work on one module at a time.  `WGSLSession` caches
+  byte-identical checks and tracks changed top-level declarations for
+  editor workflows, but cross-file dependency management belongs to
+  the host.
 
 ## Capabilities
 
 | Pass            | Status | Notes |
 |-----------------|:------:|-------|
 | Lexer           |   ✅   | Full WGSL §3 token set, template-list discovery (§3.9). |
-| Parser          |   ✅   | Pratt expressions + recursive-descent decls/stmts; corpus parses zero-error. |
+| Parser          |   ✅   | Pratt expressions + recursive-descent declarations and statements. |
 | Type system     |   ✅   | Abstract-type tower (§6.1.2), conversion rank, type interner. |
 | Resolver        |   ✅   | Predeclared scope, forward refs, kernel-split corpus convention. |
 | Const evaluator |   ✅   | Scalar + vec/mat operators, materialisation, `const_assert`. |
 | Type checker    |   ✅   | Generated builtin overload rows, composite + index expressions. |
 | Validator       |   ✅   | Recursion / cycle families, attributes, behavior, entry points, address spaces, uniformity, alias analysis. |
-| Module summary  |   ✅   | JSON: entry points, resources, structs, overrides; schema in `docs/MODULE_JSON.md`. |
+| Module summary  |   ✅   | JSON: entry points, resources, structs, overrides; schema in `include/wgsl.h` and `docs/libwgsl.md`. |
 | Memory layout   |   ✅   | Struct/resource layout validation and JSON layout summary. |
-| Uniformity      |   ✅   | CTS-clean validator behavior for the current WGSL compile corpus. |
+| Uniformity      |   ✅   | Entry-point and collective-operation uniformity analysis with regression fixtures. |
 | Alias analysis  |   ✅   | Root-granularity call-site and module-scope alias checks. |
-
-The current external conformance signal is WebGPU CTS WGSL
-shader-module validation parity: 565,599 / 565,599 compile cases
-matched in the development harness.
+| MSL emitter      |   ◐   | Target-focused WGSL→MSL text with structured partial/unsupported diagnostics. |
+| Interpreter      |   ◐   | N-lane CPU execution, buffer snapshots, races, divergence, and cost JSON. |
+| ML analysis      |   ◐   | Compute-kernel pattern and shape hints for workbench use. |
 
 ## Public C API
 
@@ -100,14 +104,18 @@ own glob does not get itself prepended.
 ## Build
 
 ```sh
-make            # build .build/libwgsl.a
-make test       # build + run native unit/API tests
-make cli        # build .build/wgsl
-make test-cli   # smoke-test the CLI
-make example-embedder # build + run examples/embedder.c
-make tsan       # build + run TSan smoke (tests/01-tsan/*)
-make wasm       # cross-compile via Emscripten → .build/wasm/wgsl_compiler.{js,wasm}
-make wasm-test  # Node smoke against the wasm bundle
+make                   # build .build/libwgsl.a
+make test              # build + run native unit/API tests
+make test-all          # native, CLI, LSP wire, corpus, and differential gates
+make test-golden       # run disk-backed interpreter/analysis fixtures
+make cli               # build .build/wgsl
+make test-cli          # smoke-test the CLI
+make example-embedder  # build + run examples/embedder.c
+make tsan              # build + run ThreadSanitizer tests (tests/01-tsan/*)
+make wasm              # cross-compile via Emscripten → .build/wasm/wgsl_compiler.{js,wasm}
+make wasm-size         # write .build/wasm*/size.txt
+make wasm-test         # Node smoke against the wasm bundle
+make wasm-simd         # build + test the SIMD128 wasm bundle
 ```
 
 The library is C99, single static archive, no system dependencies
@@ -140,17 +148,16 @@ libwgsl/
   vendor/unicode/        Pre-built Unicode 17.0.0 tables
   tests/                 One executable per `tests/NN-name/test_*.c`
   examples/              Small smoke/embedder examples
-  docs/                  PLAN, DESIGN, BENCH, SPEC-MAP, SPEC-GAPS, …
+  docs/libwgsl.md        Consolidated technical reference
+  docs/                  Additional technical documentation
 ```
 
-## Status
+## Project maturity
 
-The public API surface is in `include/wgsl.h` v0.2.0.  Current local
-verification in the development tree:
+The public C API is currently version **0.2.0**. Validation, diagnostics,
+reflection, editor queries, sessions, generated ABI bindings, and WebAssembly builds are supported surfaces. The MSL emitter, optimizer, CPU execution model, and ML-oriented analysis remain experimental and return explicit partial/unsupported results where applicable.
 
-- `make test`: 36 / 36 passed
-- WebGPU CTS WGSL shader-module validation: 565,599 / 565,599 compile
-  cases matched
+The CI badge reflects the current branch state. For a local checkout, run the relevant commands from the [Build](#build) section before relying on a surface for release or integration work.
 
 This repository intentionally carries the core C library, native CLI,
 examples, and tests.  Product surfaces such as the browser sandbox and

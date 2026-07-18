@@ -1,5 +1,5 @@
 /**
- * Phase 2 Round A — numeric literal lexer.
+ * Numeric literal lexer tests.
  *
  * Covers (per WGSL §3.5.2):
  *   decimal_int     0   123   0i   0u   42i   42u

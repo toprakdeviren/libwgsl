@@ -1,5 +1,5 @@
 /**
- * Phase 1 — `WGSLSource` line index.
+ * `WGSLSource` line-index tests.
  *
  * Covers:
  *   - empty source

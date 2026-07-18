@@ -20,13 +20,13 @@
 
 #include "internal/validate.h"
 
-/* ── Shader-stage bitset ───────────────────────────────────────────── */
+/* Shader-stage bitset. */
 
 #define STAGE_VX (1u << 0)
 #define STAGE_FR (1u << 1)
 #define STAGE_CO (1u << 2)
 
-/* ── Generic cycle DFS infra (validate.c) ──────────────────────────── */
+/* Generic cycle DFS infra (validate.c). */
 
 typedef enum { COLOR_WHITE = 0, COLOR_GRAY, COLOR_BLACK } Color;
 
@@ -52,7 +52,7 @@ int  wgsl_val_run_cycle_check(
 void wgsl_val_enum_call_edges(
     WGSLValidator *v, const WGSLSymbol *from, EdgeCb cb, void *ctx);
 
-/* ── Diagnostics (validate.c) ──────────────────────────────────────── */
+/* Diagnostics (validate.c). */
 
 void wgsl_val_error(WGSLValidator *v, const WGSLNode *at, const char *fmt, ...);
 void wgsl_val_filterable(
@@ -60,20 +60,20 @@ void wgsl_val_filterable(
     WGSLDiagSeverity severity, const char *rule,
     const char *fmt, ...);
 
-/* ── Symbol helpers (validate.c) ───────────────────────────────────── */
+/* Symbol helpers (validate.c). */
 
 int         wgsl_val_sym_index(const WGSLValidator *v, const WGSLSymbol *s);
 WGSLSymbol *wgsl_val_find_symbol_for_ast(
     const WGSLValidator *v, const WGSLNode *ast);
 
-/* ── Per-decl × stage access bitsets (access.c) ────────────────────── */
+/* Per-decl x stage access bitsets (access.c). */
 
 typedef struct {
     uint32_t *read_table;
     uint32_t *write_table;
 } AccessTables;
 
-/* ── §12 attribute helpers (attrs.c) ───────────────────────────────── */
+/* attribute helpers (attrs.c). */
 
 /* Find an `@<name>` attribute inside `node->children[start..start+count)`.
  * Returns NULL if not found. */
@@ -92,7 +92,7 @@ long long wgsl_val_attr_int_arg(
 int wgsl_val_attr_int_arg_typed(
     WGSLValidator *v, const WGSLNode *attr, long long *out);
 
-/* ── §13 builtin-name table (attrs.c) ──────────────────────────────── */
+/* builtin-name table (attrs.c). */
 
 typedef enum {
     BT_NONE = 0,
@@ -118,7 +118,7 @@ typedef struct {
 const BuiltinEntry *wgsl_val_find_builtin_entry(
     const char *nm, uint32_t nl);
 
-/* ── Per-pass driver hooks ─────────────────────────────────────────── */
+/* Per-pass driver hooks. */
 
 /* Each split file owns one (or two) of these.  The validate.c driver
  * calls them in sequence after running the cycle passes. */
@@ -134,5 +134,52 @@ void          validate_discard_stages  (WGSLValidator *v);               /* acce
 void          validate_layouts         (WGSLValidator *v, WGSLNode *tu); /* layout.c   */
 void          validate_resource_bindings(WGSLValidator *v, WGSLNode *tu);/* layout.c   */
 void          validate_uniformity      (WGSLValidator *v, WGSLNode *tu); /* uniformity.c */
+
+
+
+
+int  diagnostic_severity_value(const WGSLValidator *v, const WGSLNode *sev,
+                               const char **out_name, uint32_t *out_len);
+void check_diagnostic_severity(WGSLValidator *v, const WGSLNode *sev);
+
+/* attrs multi-TU helpers (attrs_table / attrs_walk / attrs_api). */
+
+enum {
+    AC_FN_DECL       = 1u << 0,
+    AC_FN_PARAM      = 1u << 1,
+    AC_FN_RETURN     = 1u << 2,
+    AC_VAR_MODULE    = 1u << 3,
+    AC_OVERRIDE      = 1u << 4,
+    AC_STRUCT_MEMBER = 1u << 5,
+    AC_MODULE        = 1u << 6,
+    AC_STMT          = 1u << 7,
+};
+
+typedef struct {
+    const char *name;
+    int         min_args;
+    int         max_args;
+    uint32_t    contexts;
+} AttrEntry;
+
+const AttrEntry *attr_lookup(const char *name, uint32_t name_len);
+void check_attr(WGSLValidator *v, WGSLNode *attr, uint32_t ctx_bit);
+void attr_name_span(const WGSLValidator *v, const WGSLNode *attr,
+                    const char **out_name, uint32_t *out_len);
+int  attr_is_builtin_position(const WGSLValidator *v, const WGSLNode *attr);
+int  attr_name_is(const WGSLValidator *v, const WGSLNode *attr, const char *want);
+int  attr_is_entry_point_io(const WGSLValidator *v, const WGSLNode *attr);
+void check_non_entry_io_attrs(WGSLValidator *v, WGSLNode *host,
+                              uint32_t first, uint32_t count);
+int  function_has_stage_attr(const WGSLValidator *v, const WGSLNode *fn,
+                             uint32_t attr_count);
+void check_attrs_range(WGSLValidator *v, WGSLNode *parent,
+                       uint32_t first, uint32_t count, uint32_t ctx_bit);
+void check_attrs_array(WGSLValidator *v, WGSLNode **attrs,
+                       uint32_t count, uint32_t ctx_bit);
+int  val_stmt_kind_accepts_attrs(WGSLNodeKind k);
+void validate_statement_attrs_node(WGSLValidator *v, WGSLNode *n);
+int  diagnostic_rule_name(const WGSLValidator *v, const WGSLNode *dir,
+                          const char **out_name, uint32_t *out_len);
 
 #endif /* WGSL_INTERNAL_VALIDATE_PRIV_H */

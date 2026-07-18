@@ -138,8 +138,10 @@ int wgsl_diag_emit_at(
             ? UINT32_MAX
             : span_offset + span_length;
         if (span_end > src_len) span_end = src_len;
-        wgsl_source_offset_to_line_col(src, span_start, &line, &col);
-        wgsl_source_offset_to_line_col(src, span_end, &end_line, &end_col);
+        /* UTF-16 columns: LSP's default position encoding, so squiggles
+         * stay aligned on lines containing non-ASCII. */
+        wgsl_source_offset_to_line_col_utf16(src, span_start, &line, &col);
+        wgsl_source_offset_to_line_col_utf16(src, span_end, &end_line, &end_col);
     }
 
     WGSLDiagnostic *d = &b->items[b->count++];

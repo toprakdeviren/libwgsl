@@ -1,0 +1,10 @@
+[package]
+name = "wgsl-wgpu-ref-runner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+bytemuck = "1.15"
+pollster = "0.3"
+wgpu = "0.19.4"

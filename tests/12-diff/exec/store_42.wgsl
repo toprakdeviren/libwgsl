@@ -1,0 +1,5 @@
+@group(0) @binding(0) var<storage, read_write> o: array<i32>;
+@compute @workgroup_size(1)
+fn main() {
+  o[0] = 42;
+}

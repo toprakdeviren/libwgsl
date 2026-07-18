@@ -20,9 +20,8 @@
  * Layout: 24 bytes, 8-byte aligned.  Compile-time gated; never grow
  * without a deliberate bump.
  *
- * Phase 4 covers scalar / vec / mat / atomic / array / struct.
- * Ptr / Ref / Texture / Sampler are stubbed and land in Phase 7
- * (when the type checker actually uses them).
+ * Interned kinds cover scalar, composite, aggregate, opaque handle, and
+ * memory-view types used by the resolver, checker, validator, and interpreter.
  */
 #ifndef WGSL_INTERNAL_TYPES_H
 #define WGSL_INTERNAL_TYPES_H
@@ -169,12 +168,12 @@ typedef struct WGSLTypeInfo {
     uint8_t  rows;        /* mat rows; 0 otherwise                        */
     uint32_t array_len;   /* array length; 0 = runtime-sized or n/a       */
     void    *ref;         /* element type ptr (composites) / AST (struct) */
-    uint32_t flags;       /* reserved for ref/ptr/addr_space (Phase 7)    */
+    uint32_t flags;       /* ref/ptr address-space/access; array override key */
     uint32_t pad_;        /* keep size at 24 bytes                        */
 } WGSLTypeInfo;
 
 /* Layout gate: 24 B / 8-aligned on LP64 ABIs (native arm64 / x86_64);
- * 20 B / 4-aligned on ILP32 ABIs (wasm32 / Emscripten Phase 10).  The
+ * 20 B / 4-aligned on ILP32 ABIs (wasm32 / Emscripten builds).  The
  * size shrink is the natural consequence of `void *ref` being 4 bytes
  * instead of 8 — every other field is fixed-width.  Both layouts are
  * intentional and exercised in CI. */
@@ -202,6 +201,12 @@ typedef struct WGSLTypeStore {
     WGSLTypeInfo **interned;    /* heap-grown ptr list; owns its allocation */
     size_t        count;
     size_t        capacity;
+
+    /* Open-addressed hash of interned indices (SIZE_MAX = empty).
+     * Key = (kind,width,rows,array_len,flags,pad_,ref).  O(1) average
+     * lookup replaces the previous linear scan. */
+    size_t       *htab;         /* length htab_cap; heap-owned            */
+    size_t        htab_cap;     /* power of two; 0 if unallocated          */
 
     /* Pre-interned scalars (fast path — no lookup). */
     WGSLTypeInfo *t_void;
@@ -295,20 +300,17 @@ int wgsl_type_is_constructible(const WGSLTypeInfo *t);
 /* §6.2.13 — Generation-fixed footprint.
  *
  * scalar | vec | mat | atomic | fixed-size array (const-expr length)
- * Generation-fixed footprint OR fixed-size array (override-sized variant
- * counts here even though it doesn't have GFF).  v1 can't yet
- * distinguish override-sized from runtime-sized arrays in the type
- * info (§6.2.9 identity-tracking gap), so this predicate currently
- * coincides with GFF. */
+ * Excludes override-sized arrays because their concrete length is supplied
+ * at pipeline-creation time.  Override identity is still tracked by the
+ * interner for equality. */
 int wgsl_type_has_generation_fixed_footprint(const WGSLTypeInfo *t);
 
 /* §6.2.13 — Fixed footprint.
  *
  * Generation-fixed footprint OR fixed-size array (override-sized variant
- * counts here even though it doesn't have GFF).  v1 can't yet
- * distinguish override-sized from runtime-sized arrays in the type
- * info (§6.2.9 identity-tracking gap), so this predicate currently
- * coincides with GFF. */
+ * counts here even though it doesn't have GFF).  The shallow predicate
+ * returns the generation-fixed subset; callers that have checker context
+ * handle override-sized arrays through the encoded override identity. */
 int wgsl_type_has_fixed_footprint(const WGSLTypeInfo *t);
 
 /* §6.4.1 — Storable.
@@ -349,6 +351,14 @@ WGSLTypeLayout wgsl_type_get_layout(const WGSLTypeInfo *t);
 
 /** Short kind name for diagnostics. */
 const char *wgsl_type_kind_name(WGSLTypeKind k);
+
+/** WGSL spelling of a storage-texture texel format ("rgba8unorm", …);
+ *  "" for WGSL_TEX_FORMAT_NONE.  Reused by reflection JSON. */
+const char *wgsl_texel_format_name(WGSLTexelFormat f);
+
+/** WGSL spelling of an access mode ("read"/"write"/"read_write"); ""
+ *  for WGSL_ACCESS_NONE. */
+const char *wgsl_access_mode_name(WGSLAccessMode a);
 
 /**
  * Format `t` into a human-readable WGSL-shaped string ("vec3<f32>",

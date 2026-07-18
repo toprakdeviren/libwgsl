@@ -1,12 +1,10 @@
 /**
  * @file resolver.c — WGSL §5 name resolver + scope tree.
  *
- * Iter A — predeclared scope, scope ops, module-pass-1 (registration)
- *          and module-pass-2 (walking).
- * Iter B — function-body walk: parameters, blocks, control flow,
- *          identifier resolution.  Member-access RHS is deferred to
- *          the type checker (Phase 7); attribute argument idents are
- *          attempted but silent on miss.
+ * Builds the predeclared scope, registers module-scope declarations, then
+ * walks function bodies to resolve identifiers.  Member-access RHS lookup is
+ * deferred to the type checker; attribute argument identifiers are attempted
+ * and remain silent on miss so the attribute validator can own those errors.
  *
  * AST node carries the resolution result in `payload[2]` of every
  * `EXPR_IDENT` (and the leading ident of `EXPR_TEMPLATED_IDENT`).
@@ -16,12 +14,13 @@
 #include "internal/resolver.h"
 
 #include <stdarg.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* ── Scope ops ──────────────────────────────────────────────────── */
+/* Scope ops. */
 
 #define SCOPE_INITIAL_CAP 16
 
@@ -71,7 +70,7 @@ static void scope_destroy(WGSLScope *s) {
     s->items = NULL; s->count = 0; s->capacity = 0;
 }
 
-/* ── Symbol construction ────────────────────────────────────────── */
+/* Symbol construction. */
 
 static WGSLSymbol *make_sym(
     WGSLResolver *r,
@@ -88,7 +87,7 @@ static WGSLSymbol *make_sym(
     return s;
 }
 
-/* ── Predeclared scope population ───────────────────────────────── */
+/* Predeclared scope population. */
 
 static void add_pred_value(WGSLResolver *r, const char *name, WGSLSymKind kind) {
     WGSLSymbol *s = make_sym(r, kind, name, (uint32_t)strlen(name), NULL, NULL);
@@ -238,7 +237,7 @@ static void populate_predeclared(WGSLResolver *r) {
     }
 }
 
-/* ── Diagnostics ────────────────────────────────────────────────── */
+/* Diagnostics. */
 
 static void resolve_error(
     WGSLResolver *r, const WGSLNode *n, const char *fmt, ...)
@@ -253,15 +252,62 @@ static void resolve_error(
     r->had_error = 1;
 }
 
-/* ── AST → name extraction ──────────────────────────────────────── */
+/* AST -> name extraction. */
 
 static void node_name(const WGSLResolver *r, const WGSLNode *n,
                       const char **out_ptr, uint32_t *out_len)
 {
-    uint32_t off = (uint32_t)(n->payload[0] & 0xFFFFFFFFu);
-    uint32_t len = (uint32_t)(n->payload[0] >> 32);
+    uint32_t off = wgsl_node_name_span(n).offset;
+    uint32_t len = wgsl_node_name_span(n).length;
     *out_ptr = r->src->bytes + off;
     *out_len = len;
+}
+
+typedef struct {
+    const char *name;
+    uint32_t    len;
+    uint8_t     used;
+} MemberNameSlot;
+
+static uint64_t member_name_hash(const char *name, uint32_t len) {
+    uint64_t h = 1469598103934665603ull;
+    for (uint32_t i = 0; i < len; i++) {
+        h ^= (uint8_t)name[i];
+        h *= 1099511628211ull;
+    }
+    h ^= h >> 33; h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ull;
+    h ^= h >> 33;
+    return h;
+}
+
+static size_t member_name_cap(uint32_t n) {
+    size_t need = (size_t)n * 2u;
+    size_t cap = 16u;
+    while (cap < need) {
+        if (cap > ((size_t)-1) / 2u) return 0;
+        cap *= 2u;
+    }
+    return cap;
+}
+
+static int member_name_seen_or_insert(
+    MemberNameSlot *tab, size_t cap, const char *name, uint32_t len)
+{
+    size_t mask = cap - 1u;
+    size_t slot = (size_t)member_name_hash(name, len) & mask;
+    while (tab[slot].used) {
+        if (tab[slot].len == len &&
+            memcmp(tab[slot].name, name, len) == 0)
+        {
+            return 1;
+        }
+        slot = (slot + 1u) & mask;
+    }
+    tab[slot].used = 1;
+    tab[slot].name = name;
+    tab[slot].len = len;
+    return 0;
 }
 
 /* Map an AST decl kind to the corresponding symbol kind. */
@@ -282,6 +328,43 @@ static WGSLSymKind sym_kind_for_decl(WGSLNodeKind k) {
 /* Bind a declaration's name into the given scope.  Emits "redeclaration"
  * if the same name already exists locally; emits "shadows predeclared"
  * if the predeclared scope has it (illegal per §5.1). */
+static uint64_t ptr_hash(const void *p) {
+    uint64_t h = (uint64_t)(uintptr_t)p;
+    h ^= h >> 33; h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33;
+    return h;
+}
+
+static void decl_htab_insert(WGSLResolver *r, size_t idx) {
+    if (!r->decl_htab || !r->decl_htab_cap ||
+        idx >= r->all_decl_count || !r->all_decls[idx] ||
+        !r->all_decls[idx]->ast)
+    {
+        return;
+    }
+    size_t mask = r->decl_htab_cap - 1;
+    size_t slot = (size_t)ptr_hash(r->all_decls[idx]->ast) & mask;
+    while (r->decl_htab[slot] != (size_t)-1)
+        slot = (slot + 1) & mask;
+    r->decl_htab[slot] = idx;
+}
+
+static int decl_htab_grow(WGSLResolver *r) {
+    size_t ncap = r->decl_htab_cap ? r->decl_htab_cap * 2 : 64;
+    size_t cap = 16;
+    while (cap < ncap) cap *= 2;
+    size_t *nt = (size_t *)malloc(cap * sizeof *nt);
+    if (!nt) return 0;
+    for (size_t i = 0; i < cap; i++) nt[i] = (size_t)-1;
+    size_t *old = r->decl_htab;
+    r->decl_htab = nt;
+    r->decl_htab_cap = cap;
+    for (size_t i = 0; i < r->all_decl_count; i++)
+        decl_htab_insert(r, i);
+    free(old);
+    return 1;
+}
+
 static void bind_decl(
     WGSLResolver *r, WGSLScope *scope, WGSLNode *n)
 {
@@ -302,8 +385,8 @@ static void bind_decl(
     if (!s) return;
     scope_push_item(scope, s);
 
-    /* Mirror into the flat all-decls list for AST→symbol reverse
-     * lookup by later passes. */
+    /* Mirror into the flat all-decls list + open-addressed AST hash
+     * for O(1) reverse lookup by later passes (§4.1). */
     if (r->all_decl_count == r->all_decl_capacity) {
         if (r->all_decl_capacity > SIZE_MAX / 2) return;
         size_t cap = r->all_decl_capacity ? r->all_decl_capacity * 2 : 32;
@@ -316,13 +399,21 @@ static void bind_decl(
         }
     }
     if (r->all_decl_count < r->all_decl_capacity) {
+        size_t idx = r->all_decl_count;
+        if (!r->decl_htab || r->decl_htab_cap == 0 ||
+            (idx + 1) * 10 >= r->decl_htab_cap * 7)
+        {
+            if (!decl_htab_grow(r)) return;
+        }
         r->all_decls[r->all_decl_count++] = s;
+        decl_htab_insert(r, idx);
     }
 }
 
-/* ── Walker ─────────────────────────────────────────────────────── */
+/* Walker. */
 
 static void walk(WGSLResolver *r, WGSLNode *n);
+static void walk_inner(WGSLResolver *r, WGSLNode *n);
 
 static WGSLScope *push_scope(WGSLResolver *r) {
     WGSLScope *s = (WGSLScope *)wgsl_arena_calloc(r->arena, 1, sizeof *s);
@@ -384,10 +475,10 @@ static void walk_children(WGSLResolver *r, WGSLNode *n) {
 
 static void walk_function(WGSLResolver *r, WGSLNode *n) {
     /* Children: [fn_attrs...][params...][ret_attrs...][ret_type?][body] */
-    uint32_t fn_attrs   = (uint32_t)(n->payload[1] & 0xFFFFFFFFu);
-    uint32_t param_cnt  = (uint32_t)(n->payload[1] >> 32);
-    uint32_t ret_attrs  = (uint32_t)(n->payload[2] & 0xFFFFFFFFu);
-    uint32_t has_ret    = (uint32_t)(n->payload[2] >> 32);
+    uint32_t fn_attrs   = wgsl_fn_attr_count(n);
+    uint32_t param_cnt  = wgsl_fn_param_count(n);
+    uint32_t ret_attrs  = wgsl_fn_ret_attr_count(n);
+    uint32_t has_ret    = wgsl_fn_has_return_type(n);
 
     push_scope(r);              /* function scope */
 
@@ -428,7 +519,24 @@ static void walk_function(WGSLResolver *r, WGSLNode *n) {
     pop_scope(r);
 }
 
+/* Depth-guarded entry.  All resolver recursion funnels through walk()
+ * (walk_children/walk_function only re-enter via walk()), so this single
+ * guard bounds every deep-AST vector.  The check fires before walk_inner
+ * runs any push_scope, so bailing leaves the scope chain balanced. */
 static void walk(WGSLResolver *r, WGSLNode *n) {
+    if (!n) return;
+    if (++r->depth > WGSL_MAX_AST_DEPTH) {
+        resolve_error(r, n,
+            "expression or statement nested too deeply (max %d)",
+            WGSL_MAX_AST_DEPTH);
+        --r->depth;
+        return;
+    }
+    walk_inner(r, n);
+    --r->depth;
+}
+
+static void walk_inner(WGSLResolver *r, WGSLNode *n) {
     if (!n) return;
 
     switch ((WGSLNodeKind)n->kind) {
@@ -450,26 +558,32 @@ static void walk(WGSLResolver *r, WGSLNode *n) {
         return;
 
     case WGSL_NODE_DECL_STRUCT:
-        /* Members live in their own namespace; check for duplicates. */
-        for (uint32_t i = 0; i < n->child_count; i++) {
-            WGSLNode *m1 = n->children[i];
-            if (!m1 || m1->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
-            const char *name1; uint32_t len1;
-            node_name(r, m1, &name1, &len1);
-            if (len1 == 0) continue;
-
-            for (uint32_t j = i + 1; j < n->child_count; j++) {
-                WGSLNode *m2 = n->children[j];
-                if (!m2 || m2->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
-                const char *name2; uint32_t len2;
-                node_name(r, m2, &name2, &len2);
-                if (len1 == len2 && memcmp(name1, name2, len1) == 0) {
-                    resolve_error(r, m2, "duplicate struct member '%.*s'", (int)len1, name1);
-                }
-            }
-            walk(r, m1); /* walk type-spec */
+    {
+        /* Members live in their own namespace; check duplicates in O(N). */
+        size_t member_cap = member_name_cap(n->child_count);
+        MemberNameSlot *member_names = member_cap
+            ? (MemberNameSlot *)calloc(member_cap, sizeof *member_names)
+            : NULL;
+        if (n->child_count > 0 && !member_names) {
+            resolve_error(r, n,
+                "out of memory while checking struct member names");
         }
+        for (uint32_t i = 0; i < n->child_count; i++) {
+            WGSLNode *m = n->children[i];
+            if (!m || m->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
+            const char *name; uint32_t len;
+            node_name(r, m, &name, &len);
+            if (member_names && len > 0 &&
+                member_name_seen_or_insert(member_names, member_cap, name, len))
+            {
+                resolve_error(r, m,
+                    "duplicate struct member '%.*s'", (int)len, name);
+            }
+            walk(r, m); /* walk type-spec */
+        }
+        free(member_names);
         return;
+    }
 
     case WGSL_NODE_DECL_STRUCT_MEMBER:
         walk_children(r, n);
@@ -586,7 +700,7 @@ static void walk(WGSLResolver *r, WGSLNode *n) {
     }
 }
 
-/* ── Module pre-pass: register all top-level names ──────────────── */
+/* Module pre-pass: register all top-level names. */
 
 static void register_module_decls(WGSLResolver *r, WGSLNode *tu) {
     for (uint32_t i = 0; i < tu->child_count; i++) {
@@ -608,7 +722,7 @@ static void register_module_decls(WGSLResolver *r, WGSLNode *tu) {
     }
 }
 
-/* ── Public entry ───────────────────────────────────────────────── */
+/* Public entry. */
 
 int wgsl_resolve(
     WGSLAst         *ast,
@@ -632,6 +746,18 @@ int wgsl_resolve(
 
     WGSLNode *tu = ast->root;
 
+    /* Refuse a pathologically deep AST up front (see wgsl_ast_first_over_depth):
+     * this pass's recursive walkers would otherwise overflow the stack. */
+    {
+        const WGSLNode *deep = wgsl_ast_first_over_depth(tu, WGSL_MAX_AST_DEPTH);
+        if (deep) {
+            resolve_error(out, deep,
+                "expression or statement nested too deeply (max %d)",
+                WGSL_MAX_AST_DEPTH);
+            return 0;
+        }
+    }
+
     /* Pass 1 — register module-scope names. */
     register_module_decls(out, tu);
 
@@ -651,6 +777,41 @@ WGSLSymbol *wgsl_node_resolved_symbol(const WGSLNode *ident) {
     return (WGSLSymbol *)(uintptr_t)ident->payload[2];
 }
 
+WGSLSymbol *wgsl_resolver_symbol_for_decl(
+    const WGSLResolver *r, const WGSLNode *decl)
+{
+    int idx = wgsl_resolver_index_for_decl(r, decl);
+    return idx >= 0 ? r->all_decls[idx] : NULL;
+}
+
+int wgsl_resolver_index_for_decl(
+    const WGSLResolver *r, const WGSLNode *decl)
+{
+    if (!r || !decl || !r->decl_htab || !r->decl_htab_cap) return -1;
+    size_t mask = r->decl_htab_cap - 1;
+    size_t slot = (size_t)ptr_hash(decl) & mask;
+    for (size_t n = 0; n < r->decl_htab_cap; n++) {
+        size_t idx = r->decl_htab[slot];
+        if (idx == (size_t)-1) break;
+        if (idx < r->all_decl_count && r->all_decls[idx] &&
+            r->all_decls[idx]->ast == decl)
+        {
+            return idx <= (size_t)INT_MAX ? (int)idx : -1;
+        }
+        slot = (slot + 1) & mask;
+    }
+    return -1;
+}
+
+int wgsl_resolver_index_for_symbol(
+    const WGSLResolver *r, const WGSLSymbol *sym)
+{
+    if (!r || !sym || !sym->ast) return -1;
+    int idx = wgsl_resolver_index_for_decl(r, sym->ast);
+    if (idx < 0) return -1;
+    return r->all_decls[idx] == sym ? idx : -1;
+}
+
 void wgsl_resolver_destroy(WGSLResolver *r) {
     if (!r) return;
     /* Pop any remaining function/block scopes. */
@@ -658,5 +819,6 @@ void wgsl_resolver_destroy(WGSLResolver *r) {
     scope_destroy(&r->predeclared);
     scope_destroy(&r->module);
     free(r->all_decls);
+    free(r->decl_htab);
     memset(r, 0, sizeof *r);
 }

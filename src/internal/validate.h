@@ -1,11 +1,11 @@
 /**
- * @file validate.h — WGSL validator (Phase 8).
+ * @file validate.h — WGSL validator.
  *
  * Runs after the resolver / const-evaluator / type checker.  Does NOT
  * mutate the AST; emits diagnostics and writes a small module summary
  * for downstream consumers (LSP, the public C API).
  *
- * v1 covers eight rule families per `PLAN.md`:
+ * Rule families covered here include:
  *
  *   1. recursion       — no user-fn call-graph cycles (§11.4)
  *   2. struct cycle    — no value-recursive struct types (§6.2.10)
@@ -16,9 +16,8 @@
  *   7. entry point     — stage attr / IO shape rules (§13)
  *   8. behavior set    — `Next ⊆ {Next, Return}` for fn body (§9.7)
  *
- * Address-space / layout / uniformity / alias-analysis families are
- * deferred to Iter C; the spec rule families above land in Iters A–B
- * (see `PLAN.md` Phase 8 status row).
+ * Additional validator modules enforce address-space access, layout,
+ * uniformity, entry-point IO, and alias-analysis rules.
  */
 #ifndef WGSL_INTERNAL_VALIDATE_H
 #define WGSL_INTERNAL_VALIDATE_H
@@ -34,8 +33,7 @@
 #include "internal/source.h"
 #include "internal/types.h"
 
-/** Per-fn computed behavior set (subset of §9.7 — Next bit is the only
- *  load-bearing one in v1; the others are tracked for completeness). */
+/** Per-function computed behavior set (subset of §9.7). */
 typedef enum {
     WGSL_BEHAVIOR_NEXT     = 1u << 0,
     WGSL_BEHAVIOR_BREAK    = 1u << 1,

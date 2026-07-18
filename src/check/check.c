@@ -1,5 +1,5 @@
 /**
- * @file check.c — WGSL type checker driver (Phase 7).
+ * @file check.c — WGSL type checker driver.
  *
  * Slim driver that ties together the type checker's four translation
  * units: this file (driver / side-table / walk_stmt / function-decl /
@@ -11,6 +11,7 @@
  */
 #include "internal/check.h"
 #include "internal/check_priv.h"
+#include "internal/check_walk_priv.h"
 
 #include <stdarg.h>
 #include <stdint.h>
@@ -20,7 +21,7 @@
 
 #include "internal/token.h"
 
-/* ── Diagnostics ───────────────────────────────────────────────────── */
+/* Diagnostics. */
 
 void wgsl_tc_error(
     WGSLTypeChecker *tc, const WGSLNode *at, const char *fmt, ...)
@@ -37,7 +38,76 @@ void wgsl_tc_error(
     tc->had_error = 1;
 }
 
-/* ── Side-table ────────────────────────────────────────────────────── */
+/* Side-table (open-addressed node* hash, §4.1). */
+
+#define TC_NODE_HTAB_EMPTY ((size_t)-1)
+
+static uint64_t tc_ptr_hash(const void *p) {
+    uint64_t x = (uint64_t)(uintptr_t)p;
+    x ^= x >> 33; x *= 0xff51afd7ed558ccdull;
+    x ^= x >> 33; x *= 0xc4ceb9fe1a85ec53ull;
+    x ^= x >> 33;
+    return x;
+}
+
+static int tc_node_htab_rehash(WGSLTypeChecker *tc, size_t new_cap) {
+    if (new_cap < 16) new_cap = 16;
+    size_t cap = 16;
+    while (cap < new_cap) {
+        if (cap > SIZE_MAX / 2) return 0;
+        cap *= 2;
+    }
+    size_t *nt = (size_t *)malloc(cap * sizeof *nt);
+    if (!nt) return 0;
+    for (size_t i = 0; i < cap; i++) nt[i] = TC_NODE_HTAB_EMPTY;
+    for (size_t i = 0; i < tc->count; i++) {
+        uint64_t h = tc_ptr_hash(tc->table[i].node);
+        size_t mask = cap - 1, slot = (size_t)h & mask;
+        while (nt[slot] != TC_NODE_HTAB_EMPTY) slot = (slot + 1) & mask;
+        nt[slot] = i;
+    }
+    free(tc->node_htab);
+    tc->node_htab = nt;
+    tc->node_htab_cap = cap;
+    return 1;
+}
+
+static size_t tc_node_lookup(const WGSLTypeChecker *tc, const WGSLNode *n) {
+    if (!tc->node_htab || !tc->node_htab_cap || !n) return TC_NODE_HTAB_EMPTY;
+    uint64_t h = tc_ptr_hash(n);
+    size_t mask = tc->node_htab_cap - 1, slot = (size_t)h & mask;
+    for (size_t k = 0; k < tc->node_htab_cap; k++) {
+        size_t idx = tc->node_htab[slot];
+        if (idx == TC_NODE_HTAB_EMPTY) return TC_NODE_HTAB_EMPTY;
+        if (idx < tc->count && tc->table[idx].node == n) return idx;
+        slot = (slot + 1) & mask;
+    }
+    return TC_NODE_HTAB_EMPTY;
+}
+
+static int tc_node_htab_insert(WGSLTypeChecker *tc, size_t idx) {
+    if (!tc->node_htab || tc->node_htab_cap == 0) {
+        if (!tc_node_htab_rehash(tc, 64)) return 0;
+    }
+    if (tc->count * 10 >= tc->node_htab_cap * 7) {
+        if (!tc_node_htab_rehash(tc, tc->node_htab_cap * 2)) return 0;
+    }
+    const WGSLNode *n = tc->table[idx].node;
+    uint64_t h = tc_ptr_hash(n);
+    size_t mask = tc->node_htab_cap - 1, slot = (size_t)h & mask;
+    for (;;) {
+        size_t cur = tc->node_htab[slot];
+        if (cur == TC_NODE_HTAB_EMPTY) {
+            tc->node_htab[slot] = idx;
+            return 1;
+        }
+        if (cur < tc->count && tc->table[cur].node == n) {
+            tc->node_htab[slot] = idx; /* update to latest */
+            return 1;
+        }
+        slot = (slot + 1) & mask;
+    }
+}
 
 int wgsl_tc_set_type(
     WGSLTypeChecker *tc, WGSLNode *n, WGSLTypeInfo *t, int is_ref)
@@ -51,6 +121,16 @@ int wgsl_tc_set_type(
         stored = wgsl_type_ref(tc->types, (uint8_t)as, t, am);
         if (!stored) return 0;
     }
+    /* Update in place if already recorded. */
+    size_t existing = tc_node_lookup(tc, n);
+    if (existing != TC_NODE_HTAB_EMPTY && existing < tc->count) {
+        tc->table[existing].type  = stored;
+        tc->table[existing].flags = is_ref ? WGSL_FLAG_IS_REF : 0;
+        n->flags |= WGSL_FLAG_TYPED;
+        if (is_ref) n->flags |= WGSL_FLAG_IS_REF;
+        else        n->flags &= (uint16_t)~WGSL_FLAG_IS_REF;
+        return 1;
+    }
     if (tc->count == tc->capacity) {
         if (tc->capacity > SIZE_MAX / 2) return 0;
         size_t cap = tc->capacity ? tc->capacity * 2 : 64;
@@ -61,10 +141,12 @@ int wgsl_tc_set_type(
         tc->table = g;
         tc->capacity = cap;
     }
+    size_t idx = tc->count;
     tc->table[tc->count].node  = n;
     tc->table[tc->count].type  = stored;
     tc->table[tc->count].flags = is_ref ? WGSL_FLAG_IS_REF : 0;
     tc->count += 1;
+    (void)tc_node_htab_insert(tc, idx);
     n->flags |= WGSL_FLAG_TYPED;
     if (is_ref) n->flags |= WGSL_FLAG_IS_REF;
     else        n->flags &= (uint16_t)~WGSL_FLAG_IS_REF;
@@ -75,9 +157,9 @@ WGSLTypeInfo *wgsl_typecheck_type_of(
     const WGSLTypeChecker *tc, const WGSLNode *n)
 {
     if (!tc || !n) return NULL;
-    for (size_t i = 0; i < tc->count; i++) {
-        if (tc->table[i].node == n) return tc->table[i].type;
-    }
+    size_t idx = tc_node_lookup(tc, n);
+    if (idx != TC_NODE_HTAB_EMPTY && idx < tc->count)
+        return tc->table[idx].type;
     if (n->kind == WGSL_NODE_EXPR_IDENT) {
         WGSLSymbol *s = wgsl_node_resolved_symbol(n);
         if (s && s->type) return s->type;
@@ -118,7 +200,7 @@ static WGSLTypeInfo *tc_elem_type(WGSLTypeInfo *t) {
     return NULL;
 }
 
-static int tc_same_shape(WGSLTypeInfo *a, WGSLTypeInfo *b) {
+int tc_same_shape(WGSLTypeInfo *a, WGSLTypeInfo *b) {
     if (!a || !b) return 0;
     if (wgsl_type_is_scalar(a) && wgsl_type_is_scalar(b)) return 1;
     if (a->kind == WGSL_TYPE_VEC && b->kind == WGSL_TYPE_VEC) {
@@ -130,11 +212,11 @@ static int tc_same_shape(WGSLTypeInfo *a, WGSLTypeInfo *b) {
     return 0;
 }
 
-static int tc_can_convert(WGSLTypeInfo *from, WGSLTypeInfo *to) {
+int tc_can_convert(WGSLTypeInfo *from, WGSLTypeInfo *to) {
     return from && to && wgsl_type_conversion_rank(from, to) >= 0;
 }
 
-static WGSLTokenKind compound_binary_op(WGSLTokenKind op) {
+WGSLTokenKind compound_binary_op(WGSLTokenKind op) {
     switch (op) {
     case WGSL_TOK_PLUS_EQUAL:              return WGSL_TOK_PLUS;
     case WGSL_TOK_MINUS_EQUAL:             return WGSL_TOK_MINUS;
@@ -150,11 +232,11 @@ static WGSLTokenKind compound_binary_op(WGSLTokenKind op) {
     }
 }
 
-static int validate_compound_assignment(
+int validate_compound_assignment(
     WGSLTypeChecker *tc, WGSLNode *stmt, WGSLTypeInfo *lt, WGSLTypeInfo *rt)
 {
     if (!tc || !stmt || !lt || !rt) return 0;
-    WGSLTokenKind bin = compound_binary_op((WGSLTokenKind)stmt->payload[0]);
+    WGSLTokenKind bin = compound_binary_op((WGSLTokenKind)wgsl_node_op_kind_u32(stmt));
     WGSLTypeInfo *le = tc_elem_type(lt);
     WGSLTypeInfo *re = tc_elem_type(rt);
     if (!le || !re) {
@@ -248,27 +330,18 @@ static int validate_compound_assignment(
 void wgsl_typecheck_destroy(WGSLTypeChecker *tc) {
     if (!tc) return;
     free(tc->table);
+    free(tc->node_htab);
     free(tc->override_ids);
     memset(tc, 0, sizeof *tc);
 }
 
-/* ── Symbol lookup helper ──────────────────────────────────────────── */
+/* Symbol lookup helper. */
 
 WGSLSymbol *wgsl_tc_find_decl_symbol(
     const WGSLTypeChecker *tc, const WGSLNode *decl)
 {
-    if (!tc->res) return NULL;
-    for (size_t i = 0; i < tc->res->all_decl_count; i++) {
-        if (tc->res->all_decls[i]->ast == decl) {
-            return tc->res->all_decls[i];
-        }
-    }
-    return NULL;
+    if (!tc || !tc->res) return NULL;
+    return wgsl_resolver_symbol_for_decl(tc->res, decl);
 }
 
-static void walk_stmt(WGSLTypeChecker *tc, WGSLNode *n);
 
-
-#include "check/loop_functions.inc"
-#include "check/statements.inc"
-#include "check/entry.inc"

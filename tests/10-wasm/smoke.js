@@ -1,64 +1,53 @@
 /**
  * Phase 10 — WASM build smoke test.
  *
- * Loads `.build/wasm/wgsl_compiler.{js,wasm}`, wraps the public C API
- * via Emscripten's `cwrap`, and exercises the same surfaces the
- * native suite does:
- *
- *   - process lifecycle: `wgsl_spec_pin` / `wgsl_unicode_version`
- *   - `wgsl_check` on empty, valid, and intentionally-broken sources
- *   - diagnostic accessors round-trip
- *   - module JSON shape on a compute entry point
- *   - corpus parse: feed `linear.wgsl` straight through (the multi-
- *     kernel file with unique resource names is the only corpus
- *     shader that compiles cleanly without `_shared.wgsl` prepended)
+ * Loads the Emscripten bundle through the single supported binding
+ * (`bindings/wgsl.js`) so struct offsets come from `wgsl_abi_layout`
+ * rather than hand-copied constants.
  *
  * Run via `make wasm-test`.  Requires `node`.
  */
+'use strict';
 
-const path  = require('path');
-const fs    = require('fs');
-const WGSL  = require('../../.build/wasm/wgsl_compiler.js');
+const path = require('path');
+const fs = require('fs');
+const { load } = require('../../bindings/wgsl');
 
 let pass = 0, fail = 0;
 function check(cond, msg) {
-    if (cond) { pass += 1; }
-    else      { fail += 1; console.error('FAIL  ' + msg); }
+    if (cond) pass += 1;
+    else { fail += 1; console.error('FAIL  ' + msg); }
 }
 
-WGSL().then(M => {
-    /* — Wrap the public surface — */
-    const wgsl_init             = M.cwrap('wgsl_init',             null,     []);
-    const wgsl_spec_pin         = M.cwrap('wgsl_spec_pin',         'string', []);
-    const wgsl_unicode_version  = M.cwrap('wgsl_unicode_version',  'string', []);
-    const wgsl_check            = M.cwrap('wgsl_check',            'number', ['string']);
-    const wgsl_free             = M.cwrap('wgsl_free',             null,     ['number']);
-    const wgsl_ok               = M.cwrap('wgsl_ok',               'number', ['number']);
-    const wgsl_error            = M.cwrap('wgsl_error',            'string', ['number']);
-    const wgsl_module_json      = M.cwrap('wgsl_module_json',      'string', ['number']);
-    const wgsl_module_json_len  = M.cwrap('wgsl_module_json_len',  'number', ['number']);
-    const wgsl_diagnostic_count = M.cwrap('wgsl_diagnostic_count', 'number', ['number']);
-    const wgsl_diagnostic       = M.cwrap('wgsl_diagnostic',       'number', ['number', 'number']);
-
-    wgsl_init();
-
-    /* — Process lifecycle constants — */
-    const pin = wgsl_spec_pin();
-    const uv  = wgsl_unicode_version();
+load(process.env.WGSL_WASM_JS).then(api => {
+    const pin = api.specPin();
+    const uv = api.unicodeVersion();
     check(typeof pin === 'string' && pin.length > 0, 'spec_pin non-empty');
-    check(typeof uv  === 'string' && uv.length > 0,  'unicode_version non-empty');
-    check(uv === '17.0.0',                            'unicode_version = 17.0.0');
+    check(typeof uv === 'string' && uv.length > 0, 'unicode_version non-empty');
+    check(uv === '17.0.0', 'unicode_version = 17.0.0');
 
-    /* — Empty source — */
+    /* ABI table from C — wasm32 expectations. */
+    const A = api.abi;
+    check(A.abiVersion === 1, 'abi version 1');
+    check(A.ptrSize === 4, 'wasm32 ptr_size = 4');
+    check(A.diagnostic.size === 28, 'diag size 28 (wasm32)');
+    check(A.hover.size === 24, 'hover size 24 (wasm32)');
+    check(A.definition.size === 12, 'definition size 12');
+    check(A.lexToken.size === 20, 'lex token size 20');
+    check(A.interp.stepCap === 2000000, 'interp step cap');
+    check(A.interp.bufferValuesCap === 4096, 'interp buffer values cap');
+    check(A.interp.maxLanes === 256, 'interp max lanes');
+
+    /* Empty source */
     {
-        const r = wgsl_check('');
-        check(r !== 0,                          'empty src: non-zero handle');
-        check(wgsl_ok(r) === 1,                 'empty src: ok = 1');
-        check(wgsl_diagnostic_count(r) === 0,   'empty src: 0 diags');
-        wgsl_free(r);
+        const r = api.check('');
+        check(r !== 0, 'empty src: non-zero handle');
+        check(api.ok(r), 'empty src: ok');
+        check(api.diagnosticCount(r) === 0, 'empty src: 0 diags');
+        api.free(r);
     }
 
-    /* — Simple compute shader — */
+    /* Simple compute shader */
     {
         const src =
             '@compute @workgroup_size(64)\n' +
@@ -66,172 +55,160 @@ WGSL().then(M => {
             '  let x: i32 = 1 + 2;\n' +
             '  _ = x;\n' +
             '}\n';
-        const r = wgsl_check(src);
-        check(wgsl_ok(r) === 1, 'compute src: ok');
-        const json = wgsl_module_json(r);
-        check(json.length > 0,                            'json: non-empty');
-        check(json.includes('"stage":"compute"'),         'json: stage compute');
+        const r = api.check(src);
+        check(api.ok(r), 'compute src: ok');
+        const json = api.moduleJson(r);
+        check(json.length > 0, 'json: non-empty');
+        check(json.includes('"stage":"compute"'), 'json: stage compute');
         check(json.includes('"workgroup_size":[64,1,1]'), 'json: wgs literal');
-        check(json.includes('"name":"main"'),             'json: name main');
-        check(wgsl_module_json_len(r) === json.length,    'json len matches');
-        wgsl_free(r);
+        check(json.includes('"name":"main"'), 'json: name main');
+        check(api.moduleJsonLen(r) === json.length, 'json len matches');
+        api.free(r);
     }
 
-    /* — Parse error — */
+    /* Parse error + diagnostic via ABI offsets */
     {
-        const r = wgsl_check('fn { }');
-        check(wgsl_ok(r) === 0,               'parse err: ok = 0');
-        check(wgsl_diagnostic_count(r) >= 1, 'parse err: ≥1 diag');
-        const msg = wgsl_error(r);
-        check(typeof msg === 'string' && msg.length > 0,
-              'parse err: error msg non-empty');
-
-        /* Diagnostic struct (size = 4 + 4*4 + 2 ptrs).  Read line / column
-         * via `getValue` to confirm the LSP-shape fields are reachable.
-         * Diagnostic struct layout (LP32 / wasm32):
-         *   0    severity   (i32)
-         *   4    line       (u32)
-         *   8    column     (u32)
-         *   12   end_line   (u32)
-         *   16   end_column (u32)
-         *   20   message    (i32 pointer)
-         *   24   rule       (i32 pointer) */
-        const dptr = wgsl_diagnostic(r, 0);
-        check(dptr !== 0, 'diagnostic[0]: non-NULL pointer');
-        if (dptr !== 0) {
-            const sev = M.getValue(dptr,      'i32');
-            const lin = M.getValue(dptr + 4,  'i32');
-            const col = M.getValue(dptr + 8,  'i32');
-            check(sev === 1,        'diag severity = ERROR (1)');
-            check(lin >= 1,         'diag line >= 1');
-            check(col >= 1,         'diag column >= 1');
+        const r = api.check('fn { }');
+        check(!api.ok(r), 'parse err: ok = false');
+        check(api.diagnosticCount(r) >= 1, 'parse err: ≥1 diag');
+        check(typeof api.error(r) === 'string' && api.error(r).length > 0,
+            'parse err: error msg non-empty');
+        const d = api.diagnostic(r, 0);
+        check(!!d, 'diagnostic[0] present');
+        if (d) {
+            check(d.severity === 1, 'diag severity = ERROR (1)');
+            check(d.line >= 1, 'diag line >= 1');
+            check(d.column >= 1, 'diag column >= 1');
         }
-        wgsl_free(r);
+        api.free(r);
     }
 
-    /* — Resolve error surfaces 'undeclared' — */
+    /* Resolve error */
     {
-        const r = wgsl_check('fn f() { _ = ghost; }\n');
-        check(wgsl_ok(r) === 0, 'resolve err: ok = 0');
-        check(wgsl_error(r).indexOf('undeclared') >= 0,
-              'resolve err: "undeclared" present');
-        wgsl_free(r);
+        const r = api.check('fn f() { _ = ghost; }\n');
+        check(!api.ok(r), 'resolve err: ok = false');
+        check(api.error(r).indexOf('undeclared') >= 0,
+            'resolve err: "undeclared" present');
+        api.free(r);
     }
 
-    /* — Real example shader (single-file, self-contained) — */
+    /* hello-triangle.wgsl */
     {
         const src = fs.readFileSync(
             path.resolve(__dirname, '../../examples/hello-triangle.wgsl'),
             'utf8');
-        const r = wgsl_check(src);
-        if (wgsl_ok(r) !== 1) {
-            console.error('  hello-triangle.wgsl error:', wgsl_error(r));
-        }
-        check(wgsl_ok(r) === 1,  'hello-triangle.wgsl: ok via wasm');
-        const json = wgsl_module_json(r);
+        const r = api.check(src);
+        if (!api.ok(r)) console.error('  hello-triangle.wgsl error:', api.error(r));
+        check(api.ok(r), 'hello-triangle.wgsl: ok via wasm');
+        const json = api.moduleJson(r);
         check(json.includes('"entry_points"'), 'hello-triangle.wgsl: json shape');
         check(json.includes('"stage":"vertex"'), 'hello-triangle.wgsl: vertex entry');
         check(json.includes('"stage":"fragment"'), 'hello-triangle.wgsl: fragment entry');
-        wgsl_free(r);
+        api.free(r);
     }
 
-    /* ── Extension-side FFI surface ──────────────────────────────────
-     *
-     * WASM embedders call `wgsl_hover_at_into` /
-     * `wgsl_definition_at_into` / `wgsl_semantic_tokens` and read the
-     * struct fields at fixed offsets.  Validate the wasm32 layout
-     * here so bindings can rely on it. */
-    const wgsl_hover_at_into = M.cwrap('wgsl_hover_at_into', null,
-                                       ['number', 'number', 'number']);
-    const wgsl_definition_at_into = M.cwrap('wgsl_definition_at_into', null,
-                                            ['number', 'number', 'number']);
-    const wgsl_semantic_tokens = M.cwrap('wgsl_semantic_tokens', 'number',
-                                         ['string', 'number', 'number']);
-    const wgsl_lex_free        = M.cwrap('wgsl_lex_free',        null,     ['number']);
-
-    /* hover_at_into struct shape: 0:present 4:type_repr* 8:sig*
-     * 12:doc* 16:offset 20:length (24 bytes). */
+    /* hover / definition / semantic tokens via binding helpers */
     {
         const src = 'fn f() { let x: i32 = 5; let y = x + 1; }\n';
-        const r = wgsl_check(src);
-        const offX = src.indexOf('x: i32');     /* hover at decl-x */
-        const buf = M._malloc(24);
-        wgsl_hover_at_into(r, offX, buf);
-        const present  = M.getValue(buf, 'i32');
-        const typePtr  = M.getValue(buf + 4, 'i32');
-        const sOffset  = M.getValue(buf + 16, 'i32');
-        const sLength  = M.getValue(buf + 20, 'i32');
-        check(present === 1,                'hover_into: present');
-        check(M.UTF8ToString(typePtr) === 'i32',
-                                            'hover_into: typeRepr = "i32"');
-        check(sOffset === offX,             'hover_into: symbol offset');
-        check(sLength === 1,                'hover_into: symbol length');
-        M._free(buf);
-        wgsl_free(r);
+        const r = api.check(src);
+        const offX = src.indexOf('x: i32');
+        const h = api.hoverAt(r, offX);
+        check(h.present === true, 'hover_into: present');
+        check(h.typeRepr === 'i32', 'hover_into: typeRepr = "i32"');
+        check(h.symbolOffset === offX, 'hover_into: symbol offset');
+        check(h.symbolLength === 1, 'hover_into: symbol length');
+        api.free(r);
     }
-
-    /* definition_at_into struct shape: 0:present 4:offset 8:length
-     * (12 bytes). */
     {
         const src = 'fn add(a: i32) -> i32 { return a; }\n' +
                     'fn caller() { _ = add(1); }\n';
-        const r = wgsl_check(src);
-        const useOff  = src.indexOf('add(1)');
-        const declOff = src.indexOf('add');     /* first occurrence = decl */
-        const buf = M._malloc(12);
-        wgsl_definition_at_into(r, useOff, buf);
-        const present = M.getValue(buf,     'i32');
-        const dOff    = M.getValue(buf + 4, 'i32');
-        const dLen    = M.getValue(buf + 8, 'i32');
-        check(present === 1,        'def_into: present');
-        check(dOff === declOff,     'def_into: offset → decl name');
-        check(dLen === 3,           'def_into: length === 3');
-        M._free(buf);
-        wgsl_free(r);
+        const r = api.check(src);
+        const useOff = src.indexOf('add(1)');
+        const declOff = src.indexOf('add');
+        const d = api.definitionAt(r, useOff);
+        check(d.present === true, 'def_into: present');
+        check(d.offset === declOff, 'def_into: offset → decl name');
+        check(d.length === 3, 'def_into: length === 3');
+        api.free(r);
     }
-
-    /* semantic_tokens struct shape: 0:kind 4:offset 8:length 12:line
-     * 16:column (20 bytes per token). */
     {
         const src = 'fn add(a: i32) -> i32 { return a; }\n';
-        const ptrPtr = M._malloc(4);
-        const cntPtr = M._malloc(4);
-        const ok = wgsl_semantic_tokens(src, ptrPtr, cntPtr);
-        check(ok === 1, 'sem_tokens: rc = 1');
-        const arrPtr = M.getValue(ptrPtr, 'i32');
-        const count  = M.getValue(cntPtr, 'i32');
-        check(count > 0, 'sem_tokens: count > 0');
-
-        let sawFnName = false, sawType = false, sawParam = false;
+        const toks = api.semanticTokens(src);
+        check(toks.length > 0, 'sem_tokens: count > 0');
         const FUNCTION_NAME = 15, TYPE = 3, PARAMETER = 16;
-        for (let i = 0; i < count; i++) {
-            const t = arrPtr + i * 20;
-            const kind   = M.getValue(t,      'i32');
-            const offset = M.getValue(t + 4,  'i32');
-            const length = M.getValue(t + 8,  'i32');
-            if (kind === FUNCTION_NAME && length === 3 &&
-                src.substr(offset, 3) === 'add') sawFnName = true;
-            if (kind === TYPE && length === 3 &&
-                src.substr(offset, 3) === 'i32') sawType = true;
-            if (kind === PARAMETER && length === 1 && src[offset] === 'a')
+        let sawFnName = false, sawType = false, sawParam = false;
+        for (const t of toks) {
+            if (t.kind === FUNCTION_NAME && t.length === 3 &&
+                src.substr(t.offset, 3) === 'add') sawFnName = true;
+            if (t.kind === TYPE && t.length === 3 &&
+                src.substr(t.offset, 3) === 'i32') sawType = true;
+            if (t.kind === PARAMETER && t.length === 1 && src[t.offset] === 'a')
                 sawParam = true;
         }
         check(sawFnName, 'sem_tokens: `add` → FUNCTION_NAME');
-        check(sawType,   'sem_tokens: `i32` → TYPE');
-        check(sawParam,  'sem_tokens: `a` → PARAMETER');
+        check(sawType, 'sem_tokens: `i32` → TYPE');
+        check(sawParam, 'sem_tokens: `a` → PARAMETER');
+    }
 
-        wgsl_lex_free(arrPtr);
-        M._free(ptrPtr);
-        M._free(cntPtr);
+    /* Formatter + range formatter wrappers */
+    {
+        const src = 'enable f16;const A:i32=1;fn f(){let x=1;}fn g(){let y=2;}';
+        const fmt = api.format(src);
+        check(fmt.includes('enable f16;\n\nconst A: i32 = 1;\n\nfn f()'),
+            'format: canonical top-level blank lines');
+        const start = src.indexOf('y=2');
+        const rf = api.formatRange(src, start, start);
+        check(rf.text.includes('fn g()') && !rf.text.includes('fn f()'),
+            'formatRange: only touched top-level unit');
+        check(rf.text.includes('let y = 2;'), 'formatRange: formatted body');
+        check(rf.editStart === src.indexOf('fn g'), 'formatRange: editStart');
+        check(rf.editEnd === src.length, 'formatRange: editEnd');
+    }
+
+    /* Product-surface JSON helpers: optimize, ML, MSL */
+    {
+        const optSrc =
+            '@compute @workgroup_size(1)\n' +
+            'fn main() {\n' +
+            '  let dead = 1;\n' +
+            '  let keep = 2;\n' +
+            '  _ = keep;\n' +
+            '}\n';
+        const report = api.optimize(optSrc);
+        check(Array.isArray(report.findings) && report.findings.length >= 1,
+            'optimize: findings array');
+        const applied = api.optimizeApply(optSrc);
+        check(!applied.includes('let dead'), 'optimizeApply: removes unused local');
+        check(applied.includes('let keep'), 'optimizeApply: preserves used local');
+    }
+    {
+        const mlSrc =
+            '@group(0) @binding(0) var<storage, read_write> B: array<f32>;\n' +
+            '@compute @workgroup_size(16, 16)\n' +
+            'fn matmul_main(@builtin(global_invocation_id) gid: vec3<u32>) {\n' +
+            '  B[gid.x] = f32(gid.x);\n' +
+            '}\n';
+        const ml = api.mlAnalyze(mlSrc);
+        check(ml.kind === 'ml_kernel', 'mlAnalyze: kind');
+        check(Array.isArray(ml.patterns) && ml.patterns.includes('matmul'),
+            'mlAnalyze: matmul pattern');
+    }
+    {
+        const mslSrc =
+            '@vertex fn vs(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4f {\n' +
+            '  return vec4f(0.0, 0.0, 0.0, 1.0);\n' +
+            '}\n';
+        const msl = api.toMsl(mslSrc);
+        check(msl.includes('vertex') || msl.includes('Generated by libwgsl'),
+            'toMsl: emits MSL text');
     }
 
     if (fail === 0) {
         console.log(`PASS  wasm-smoke  (${pass} checks)`);
         process.exit(0);
-    } else {
-        console.error(`FAIL  wasm-smoke  ${fail}/${pass + fail} checks failed`);
-        process.exit(1);
     }
+    console.error(`FAIL  wasm-smoke  ${fail}/${pass + fail} checks failed`);
+    process.exit(1);
 }).catch(err => {
     console.error('FAIL  wasm-smoke loader:', err && err.stack || err);
     process.exit(1);

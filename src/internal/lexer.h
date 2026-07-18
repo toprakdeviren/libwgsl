@@ -9,8 +9,8 @@
  * non-zero integer, forbidden `__` ident prefix, unknown character)
  * surface as diagnostics on the bag and the function returns 0.
  *
- * Round B (next iteration) adds template-list discovery (§3.9) on top.
- * For Round A, `<`/`>` are tokenized as `LESS`/`GREATER` etc.
+ * `wgsl_tokenize` also applies WGSL §3.9 template-list discovery before
+ * returning the final token stream.
  */
 #ifndef WGSL_INTERNAL_LEXER_H
 #define WGSL_INTERNAL_LEXER_H
@@ -58,10 +58,19 @@ int wgsl_tokenize(
  * Exposed mostly for the test suite.  Production code should call
  * `wgsl_tokenize` which already runs this internally.
  *
- * @return 1 on success, 0 on out-of-memory.
+ * `diag`/`source` may be NULL (e.g. from tests that don't care about
+ * diagnostics); when both are non-NULL an error is emitted if template
+ * nesting exceeds the internal stack limit instead of silently dropping
+ * the candidate `<`.
+ *
+ * @return 1 on success, 0 on out-of-memory.  A template-nesting-too-deep
+ *         condition is reported via `diag` (not the return value); the
+ *         higher-level check then fails on the error-severity diagnostic.
  */
 int wgsl_discover_templates(
-    WGSLLexResult *result,
-    WGSLArena     *arena);
+    WGSLLexResult    *result,
+    WGSLArena        *arena,
+    WGSLDiagBag      *diag,
+    const WGSLSource *source);
 
 #endif /* WGSL_INTERNAL_LEXER_H */

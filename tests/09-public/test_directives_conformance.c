@@ -76,7 +76,7 @@ static void expect_reject(const char *src, const char *needle,
 }
 
 int main(void) {
-    /* ── §4 lead — placement and presence ──────────────────────── */
+    /* §4 lead - placement and presence. */
     expect_ok("enable f16;\n",
               "§4: directives-only module is valid");
     expect_ok("enable f16;\nconst X = 1;\n",
@@ -89,7 +89,7 @@ int main(void) {
     expect_reject("struct S { x: i32 } requires readonly_and_readwrite_storage_textures;", "requires",
                   "§4: declaration before `requires` → shader-generation error");
 
-    /* ── §4.1.1 — enable directive forms ───────────────────────── */
+    /* §4.1.1 - enable directive forms. */
     expect_ok("enable f16;\n",
               "§4.1.1: enable f16 single");
     expect_ok("enable f16, clip_distances;\n",
@@ -112,7 +112,7 @@ int main(void) {
                   ";",
                   "§4.1.1: missing semicolon after enable list rejected");
 
-    /* ── §4.1.2 — requires directive forms ─────────────────────── */
+    /* §4.1.2 - requires directive forms. */
     expect_ok("requires readonly_and_readwrite_storage_textures;\n",
               "§4.1.2: requires single");
     expect_ok("requires readonly_and_readwrite_storage_textures,"
@@ -138,7 +138,7 @@ int main(void) {
               "requires texture_formats_tier1;\n",
               "§4.1.2: redundant requires directives accepted");
 
-    /* ── §4.2 — global diagnostic filter directive ─────────────── *
+    /* §4.2 - global diagnostic filter directive.
      *                                                             *
      * Every (severity_control × filterable_rule) pair compiles    *
      * at module scope.  §4.2 says the diagnostic directive is     *
@@ -160,7 +160,7 @@ int main(void) {
         }
     }
 
-    /* ── Mixed directives — all three kinds coexist before decls ─ */
+    /* Mixed directives - all three kinds coexist before decls. */
     expect_ok(
         "diagnostic(off, derivative_uniformity);\n"
         "enable f16;\n"

@@ -1,5 +1,5 @@
 /**
- * Phase 3 Round B Iter 2 — module-scope declarations.
+ * Module-scope declaration parser tests.
  *
  * Covers:
  *   - struct (with members, attributes on members)
@@ -52,8 +52,8 @@ static void done(P *p) {
 }
 
 static int name_eq(const WGSLNode *n, const WGSLSource *s, const char *want) {
-    uint32_t off = (uint32_t)(n->payload[0] & 0xFFFFFFFFu);
-    uint32_t len = (uint32_t)(n->payload[0] >> 32);
+    uint32_t off = wgsl_node_name_span(n).offset;
+    uint32_t len = wgsl_node_name_span(n).length;
     size_t wl = strlen(want);
     if (len != wl) return 0;
     return memcmp(s->bytes + off, want, wl) == 0;
@@ -78,11 +78,11 @@ int main(void) {
         const WGSLNode *m0 = s->children[0];
         CHECK(m0->kind == WGSL_NODE_DECL_STRUCT_MEMBER, "m0: kind");
         CHECK(name_eq(m0, &p.src, "pos"),               "m0: name");
-        uint32_t m0_attrs = (uint32_t)m0->payload[1];
+        uint32_t m0_attrs = wgsl_member_attr_count(m0);
         CHECK(m0_attrs == 1,                            "m0: 1 attribute");
         const WGSLNode *m2 = s->children[2];
         CHECK(name_eq(m2, &p.src, "color"),             "m2: name");
-        uint32_t m2_attrs = (uint32_t)m2->payload[1];
+        uint32_t m2_attrs = wgsl_member_attr_count(m2);
         CHECK(m2_attrs == 0,                            "m2: 0 attributes");
         done(&p);
     }
@@ -117,8 +117,8 @@ int main(void) {
         const WGSLNode *o = p.ast.root->children[0];
         CHECK(o->kind == WGSL_NODE_DECL_OVERRIDE, "override: kind");
         CHECK(name_eq(o, &p.src, "threshold"),     "override: name");
-        uint32_t has_type = (uint32_t)(o->payload[2] & 0xFFFFFFFFu);
-        uint32_t has_init = (uint32_t)(o->payload[2] >> 32);
+        uint32_t has_type = (uint32_t)wgsl_varlike_has_type(o);
+        uint32_t has_init = (uint32_t)wgsl_varlike_has_init(o);
         CHECK(has_type == 1 && has_init == 0, "override: type-only");
         done(&p);
     }
@@ -128,9 +128,9 @@ int main(void) {
         CHECK(p.ok, "override @id: ok");
         const WGSLNode *o = p.ast.root->children[0];
         CHECK(name_eq(o, &p.src, "factor"), "override @id: name");
-        uint32_t attr_count = (uint32_t)(o->payload[1] & 0xFFFFFFFFu);
-        uint32_t has_type   = (uint32_t)(o->payload[2] & 0xFFFFFFFFu);
-        uint32_t has_init   = (uint32_t)(o->payload[2] >> 32);
+        uint32_t attr_count = wgsl_varlike_attr_count(o);
+        uint32_t has_type   = (uint32_t)wgsl_varlike_has_type(o);
+        uint32_t has_init   = (uint32_t)wgsl_varlike_has_init(o);
         CHECK(attr_count == 1 && has_type == 1 && has_init == 1,
               "override @id: counts");
         const WGSLNode *attr = o->children[0];
@@ -145,10 +145,10 @@ int main(void) {
         const WGSLNode *v = p.ast.root->children[0];
         CHECK(v->kind == WGSL_NODE_DECL_VAR, "var: kind");
         CHECK(name_eq(v, &p.src, "buf"),      "var: name");
-        uint32_t attr_count = (uint32_t)(v->payload[1] & 0xFFFFFFFFu);
-        uint32_t tpl_count  = (uint32_t)(v->payload[1] >> 32);
-        uint32_t has_type   = (uint32_t)(v->payload[2] & 0xFFFFFFFFu);
-        uint32_t has_init   = (uint32_t)(v->payload[2] >> 32);
+        uint32_t attr_count = wgsl_varlike_attr_count(v);
+        uint32_t tpl_count  = wgsl_varlike_tpl_count(v);
+        uint32_t has_type   = (uint32_t)wgsl_varlike_has_type(v);
+        uint32_t has_init   = (uint32_t)wgsl_varlike_has_init(v);
         CHECK(attr_count == 2, "var: 2 attrs (@group, @binding)");
         CHECK(tpl_count  == 2, "var: 2 tpl args (storage, read_write)");
         CHECK(has_type   == 1, "var: has_type");
@@ -162,8 +162,8 @@ int main(void) {
         P p; run(&p, "var<private> counter: u32 = 0u;");
         CHECK(p.ok, "var<private>: ok");
         const WGSLNode *v = p.ast.root->children[0];
-        uint32_t tpl_count  = (uint32_t)(v->payload[1] >> 32);
-        uint32_t has_init   = (uint32_t)(v->payload[2] >> 32);
+        uint32_t tpl_count  = wgsl_varlike_tpl_count(v);
+        uint32_t has_init   = (uint32_t)wgsl_varlike_has_init(v);
         CHECK(tpl_count == 1, "var<private>: 1 tpl arg");
         CHECK(has_init  == 1, "var<private>: has_init");
         done(&p);

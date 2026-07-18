@@ -1,5 +1,5 @@
 /**
- * @file check.h — WGSL type checker / overload resolver (Phase 7).
+ * @file check.h — WGSL type checker / overload resolver.
  *
  * Tags every expression node with an effective `WGSLTypeInfo *`.
  * Reference expressions carry a structural `WGSL_TYPE_REF`
@@ -12,32 +12,17 @@
  *     this for predeclared types; the type checker fills it for every
  *     user const / let / var / param / function / struct / alias).
  *
- *   - **Expression type** — kept on a side-table keyed by `WGSLNode *`
- *     (linear scan in v1; swap for a hash table when a profile demands
- *     it).  `EXPR_IDENT` entries are recorded too, so `var` uses can
+ *   - **Expression type** — kept on a side-table keyed by `WGSLNode *`.
+ *     `EXPR_IDENT` entries are recorded too, so `var` uses can
  *     expose their structural `ref<AS,T,AM>` type without changing the
  *     declaration symbol's store type.
  *
  *   - **`is_ref` bit** — `WGSL_FLAG_IS_REF` set on the expression node
  *     itself for compatibility and fast checks; `WGSL_FLAG_TYPED` marks
  *     "the type checker visited me".
- *
- * Iter A scope (this iteration):
- *
- *   - Type-specifier resolution: scalar, `vec*<T>`, `mat*x*<T>`,
- *     `atomic<T>`, `array<T>`, `array<T, N>` (where N is a const-eval'd
- *     symbol), and pre-declared aliases (`vec3f`, `mat4x4f`, …).
- *   - Module-scope decl typing: every `const` / `override` / `var` /
- *     `let` / `param` / `struct member` / `alias` gets `sym->type`.
- *   - Function-body walk that types: literals, identifiers, parens,
- *     unary `- ! ~`, binary numeric / comparison / logical / bitwise.
- *
- * Iter B will add: operator overloads on vec/mat, constructors,
- * member access (swizzle + struct field), index, address-of /
- * indirection / ref-vs-ptr semantics, assignment-statement validation.
- *
- * Iter C will adopt the Tint-style `def/wgsl.def` DSL + codegen for the
- * full builtin function overload table.
+ * The checker resolves type specifiers, assigns symbol and expression types,
+ * validates constructors and operators, and resolves builtin overloads from
+ * the generated `def/wgsl.def` metadata.
  */
 #ifndef WGSL_INTERNAL_CHECK_H
 #define WGSL_INTERNAL_CHECK_H
@@ -111,6 +96,10 @@ typedef struct WGSLTypeChecker {
     size_t        count;
     size_t        capacity;
 
+    /* Open-addressed node* → table index (SIZE_MAX = empty). */
+    size_t       *node_htab;
+    size_t        node_htab_cap;
+
     /* §7.2.2 @id uniqueness — heap-grown; type_decl_override pushes
      * each `@id(N)` after a duplicate scan.  Heap rather than inline
      * to keep WGSLTypeChecker's size from rippling through
@@ -122,6 +111,7 @@ typedef struct WGSLTypeChecker {
     int           had_error;
     int           in_function;   /* 1 while inside type_function body */
     int           suppress_consteval_value_errors;
+    int           expr_depth;    /* current wgsl_tc_type_expr recursion */
 
     /* §9.4.10 return type checking — set on entry to a function body,
      * cleared on exit.  NULL means "no return type written" (void). */
@@ -142,7 +132,33 @@ typedef struct WGSLTypeChecker {
      * `inner_continue_target_depth == 0`, a `continue` would target
      * the enclosing loop's continuing block — forbidden. */
     int           inner_continue_target_depth;
+
+    /* Session partial typecheck: names of functions whose *bodies* may
+     * be skipped (signature/params/return still typed).  Borrowed;
+     * owned by the session for the duration of `wgsl_typecheck*`. */
+    const char *const *skip_body_names;
+    const uint32_t    *skip_body_name_lens;
+    int                skip_body_count;
+    int                bodies_typed;    /* function bodies walked       */
+    int                bodies_skipped;  /* function bodies skipped      */
+    int                skipped_nodes;   /* AST nodes skipped in bodies  */
 } WGSLTypeChecker;
+
+/**
+ * Optional knobs for `wgsl_typecheck_with_opts`.  A NULL opts pointer
+ * (or zeroed opts) means "type every function body".
+ *
+ * `skip_body_names` / `skip_body_name_lens` identify top-level
+ * functions whose bodies are content-stable under a stable module
+ * interface; only the signature is typed for those.  Callers that
+ * later need expression types (hover) use
+ * `wgsl_typecheck_ensure_function_body`.
+ */
+typedef struct {
+    const char *const *skip_body_names;
+    const uint32_t    *skip_body_name_lens;
+    int                skip_body_count;
+} WGSLTypecheckOpts;
 
 /**
  * Type-check the entire translation unit.  Walks decls in source
@@ -164,6 +180,25 @@ int wgsl_typecheck(
     WGSLResolver        *res,
     WGSLConstEvaluator  *cev,
     WGSLTypeChecker     *out);
+
+/** Like `wgsl_typecheck`, with optional body-skip plan (may be NULL). */
+int wgsl_typecheck_with_opts(
+    WGSLAst             *ast,
+    const WGSLSource    *src,
+    WGSLArena           *arena,
+    WGSLDiagBag         *diag,
+    WGSLTypeStore       *types,
+    WGSLResolver        *res,
+    WGSLConstEvaluator  *cev,
+    WGSLTypeChecker     *out,
+    const WGSLTypecheckOpts *opts);
+
+/**
+ * If `fn` is a function whose body was skipped during partial
+ * typecheck, walk the body now and clear `WGSL_SYM_FLAG_BODY_SKIPPED`.
+ * No-op when the body was already typed.  Returns 1 on success.
+ */
+int wgsl_typecheck_ensure_function_body(WGSLTypeChecker *tc, WGSLNode *fn);
 
 /** Look up the type the checker assigned to `n`.  Reference expressions
  *  return `WGSL_TYPE_REF` (`ref<AS,T,AM>`), not just the store type.

@@ -1,5 +1,5 @@
 /**
- * Phase 4 — TypeInfo + interning + conversion rank + concretization.
+ * TypeInfo, interning, conversion rank, and concretization tests.
  *
  * Covers:
  *   - sizeof(WGSLTypeInfo) gate (24 B, 8-byte aligned)

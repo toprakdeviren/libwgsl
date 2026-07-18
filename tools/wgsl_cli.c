@@ -32,15 +32,22 @@ static void print_usage(FILE *out, const char *prog) {
         "  %s check [--quiet] [--json] FILE...\n"
         "  %s json FILE\n"
         "  %s ast FILE\n"
+        "  %s interp [--entry NAME] [--gx N] [--gy N] [--gz N]\n"
+        "           [--len N] [--seeds JSON] FILE\n"
+        "  %s debug [--entry NAME] [--gx N] [--gy N] [--gz N]\n"
+        "          [--len N] [--seeds JSON] FILE\n"
+        "  %s optimize [--apply] FILE\n"
+        "  %s msl FILE\n"
+        "  %s ml FILE\n"
         "  %s version\n"
         "\n"
         "FILE may be '-' to read from stdin.\n"
         "\n"
         "exit codes:\n"
         "  0  valid input / command succeeded\n"
-        "  1  WGSL validation failed\n"
+        "  1  WGSL validation failed (check) or interp ok:false\n"
         "  2  usage, I/O, or internal CLI error\n",
-        prog, prog, prog, prog);
+        prog, prog, prog, prog, prog, prog, prog, prog, prog);
 }
 
 static int read_stream(FILE *f, InputBuffer *out, char *err, size_t err_len) {
@@ -123,9 +130,11 @@ static int read_file(const char *path, InputBuffer *out, char *err, size_t err_l
 
     size_t n = fread(bytes, 1, length, f);
     if (n != length) {
+        int read_error = ferror(f);
         free(bytes);
         fclose(f);
-        snprintf(err, err_len, "read failed: %s", ferror(f) ? strerror(errno) : "short read");
+        snprintf(err, err_len, "read failed: %s",
+                 read_error ? strerror(errno) : "short read");
         return 0;
     }
     fclose(f);
@@ -421,6 +430,229 @@ static int run_ast(int argc, char **argv, const char *prog) {
     return rc;
 }
 
+/* §6.3 — ML-kernel analysis JSON. */
+static int run_ml(int argc, char **argv, const char *prog) {
+    if (argc != 3) {
+        fprintf(stderr, "%s ml: usage: %s ml FILE\n", prog, prog);
+        return 2;
+    }
+    char err[256];
+    InputBuffer input;
+    if (!read_file(argv[2], &input, err, sizeof err)) {
+        fprintf(stderr, "%s: %s\n", argv[2], err);
+        return 2;
+    }
+    char *json = wgsl_ml_analyze_json_src(input.bytes);
+    free(input.bytes);
+    if (!json) {
+        fprintf(stderr, "%s: ml_analyze failed\n", argv[2]);
+        return 2;
+    }
+    fputs(json, stdout);
+    if (json[0] && json[strlen(json) - 1] != '\n') fputc('\n', stdout);
+    wgsl_free_string(json);
+    return 0;
+}
+
+/* §6.1 — WGSL → MSL. */
+static int run_msl(int argc, char **argv, const char *prog) {
+    if (argc != 3) {
+        fprintf(stderr, "%s msl: usage: %s msl FILE\n", prog, prog);
+        return 2;
+    }
+    char err[256];
+    InputBuffer input;
+    if (!read_file(argv[2], &input, err, sizeof err)) {
+        fprintf(stderr, "%s: %s\n", argv[2], err);
+        return 2;
+    }
+    char *msl = wgsl_to_msl_n(input.bytes, input.length);
+    free(input.bytes);
+    if (!msl) {
+        fprintf(stderr, "%s: wgsl_to_msl failed\n", argv[2]);
+        return 2;
+    }
+    fputs(msl, stdout);
+    if (msl[0] && msl[strlen(msl) - 1] != '\n') fputc('\n', stdout);
+    wgsl_free_string(msl);
+    return 0;
+}
+
+/* §6.2 — optimization analysis / safe apply. */
+static int run_optimize(int argc, char **argv, const char *prog) {
+    int apply = 0;
+    const char *file = NULL;
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--apply") == 0) {
+            apply = 1;
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "%s optimize: unknown option %s\n", prog, argv[i]);
+            return 2;
+        } else if (!file) {
+            file = argv[i];
+        } else {
+            fprintf(stderr, "%s optimize: extra argument %s\n", prog, argv[i]);
+            return 2;
+        }
+    }
+    if (!file) {
+        fprintf(stderr, "%s optimize: missing FILE\n", prog);
+        return 2;
+    }
+    char err[256];
+    InputBuffer input;
+    if (!read_file(file, &input, err, sizeof err)) {
+        fprintf(stderr, "%s: %s\n", file, err);
+        return 2;
+    }
+    int rc = 0;
+    if (apply) {
+        char *out = wgsl_optimize_apply(input.bytes);
+        free(input.bytes);
+        if (!out) {
+            fprintf(stderr, "%s: optimize_apply failed\n", file);
+            return 2;
+        }
+        fputs(out, stdout);
+        if (out[0] && out[strlen(out) - 1] != '\n') fputc('\n', stdout);
+        wgsl_free_string(out);
+    } else {
+        char *json = wgsl_optimize_json_src(input.bytes);
+        free(input.bytes);
+        if (!json) {
+            fprintf(stderr, "%s: optimize_json failed\n", file);
+            return 2;
+        }
+        fputs(json, stdout);
+        if (json[0] && json[strlen(json) - 1] != '\n') fputc('\n', stdout);
+        wgsl_free_string(json);
+    }
+    return rc;
+}
+
+/* §5.4 — run the CPU interpreter; print the full JSON trace. */
+static int run_interp(int argc, char **argv, const char *prog) {
+    const char *entry = "main";
+    unsigned gx = 0, gy = 0, gz = 0, len = 1;
+    const char *seeds = NULL;
+    const char *file = NULL;
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--entry") == 0 && i + 1 < argc) {
+            entry = argv[++i];
+        } else if (strcmp(argv[i], "--gx") == 0 && i + 1 < argc) {
+            gx = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--gy") == 0 && i + 1 < argc) {
+            gy = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--gz") == 0 && i + 1 < argc) {
+            gz = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--len") == 0 && i + 1 < argc) {
+            len = (unsigned)strtoul(argv[++i], NULL, 10);
+            if (len == 0) len = 1;
+        } else if (strcmp(argv[i], "--seeds") == 0 && i + 1 < argc) {
+            seeds = argv[++i];
+        } else if (strcmp(argv[i], "-") == 0 && !file) {
+            file = argv[i];
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "%s interp: unknown option %s\n", prog, argv[i]);
+            print_usage(stderr, prog);
+            return 2;
+        } else if (!file) {
+            file = argv[i];
+        } else {
+            fprintf(stderr, "%s interp: extra argument %s\n", prog, argv[i]);
+            return 2;
+        }
+    }
+    if (!file) {
+        fprintf(stderr, "%s interp: missing FILE\n", prog);
+        print_usage(stderr, prog);
+        return 2;
+    }
+
+    char err[256];
+    InputBuffer input;
+    if (!read_file(file, &input, err, sizeof err)) {
+        fprintf(stderr, "%s: %s\n", file, err);
+        return 2;
+    }
+
+    char *json = wgsl_interp(input.bytes, entry, gx, gy, gz, len, seeds);
+    free(input.bytes);
+    if (!json) {
+        fprintf(stderr, "%s: wgsl_interp returned null\n", file);
+        return 2;
+    }
+    fputs(json, stdout);
+    if (json[0] && json[strlen(json) - 1] != '\n') fputc('\n', stdout);
+
+    int rc = 0;
+    if (strstr(json, "\"ok\":false") != NULL) rc = 1;
+    wgsl_free_string(json);
+    return rc;
+}
+
+/* Differentiator wedge — CI JSON oracle + short explanations. */
+static int run_debug(int argc, char **argv, const char *prog) {
+    const char *entry = "main";
+    unsigned gx = 0, gy = 0, gz = 0, len = 1;
+    const char *seeds = NULL;
+    const char *file = NULL;
+
+    for (int i = 2; i < argc; i++) {
+        if (strcmp(argv[i], "--entry") == 0 && i + 1 < argc) {
+            entry = argv[++i];
+        } else if (strcmp(argv[i], "--gx") == 0 && i + 1 < argc) {
+            gx = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--gy") == 0 && i + 1 < argc) {
+            gy = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--gz") == 0 && i + 1 < argc) {
+            gz = (unsigned)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--len") == 0 && i + 1 < argc) {
+            len = (unsigned)strtoul(argv[++i], NULL, 10);
+            if (len == 0) len = 1;
+        } else if (strcmp(argv[i], "--seeds") == 0 && i + 1 < argc) {
+            seeds = argv[++i];
+        } else if (strcmp(argv[i], "-") == 0 && !file) {
+            file = argv[i];
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "%s debug: unknown option %s\n", prog, argv[i]);
+            print_usage(stderr, prog);
+            return 2;
+        } else if (!file) {
+            file = argv[i];
+        } else {
+            fprintf(stderr, "%s debug: extra argument %s\n", prog, argv[i]);
+            return 2;
+        }
+    }
+    if (!file) {
+        fprintf(stderr, "%s debug: missing FILE\n", prog);
+        print_usage(stderr, prog);
+        return 2;
+    }
+
+    char err[256];
+    InputBuffer input;
+    if (!read_file(file, &input, err, sizeof err)) {
+        fprintf(stderr, "%s: %s\n", file, err);
+        return 2;
+    }
+
+    char *json = wgsl_debug_oracle(input.bytes, entry, gx, gy, gz, len, seeds);
+    free(input.bytes);
+    if (!json) {
+        fprintf(stderr, "%s: wgsl_debug_oracle returned null\n", file);
+        return 2;
+    }
+    fputs(json, stdout);
+    if (json[0] && json[strlen(json) - 1] != '\n') fputc('\n', stdout);
+
+    int rc = strstr(json, "\"verdict\":\"fail\"") ? 1 : 0;
+    wgsl_free_string(json);
+    return rc;
+}
+
 int main(int argc, char **argv) {
     const char *prog = argc > 0 && argv[0] ? argv[0] : "wgsl";
 
@@ -440,6 +672,16 @@ int main(int argc, char **argv) {
         rc = run_json(argc, argv, prog);
     } else if (strcmp(argv[1], "ast") == 0) {
         rc = run_ast(argc, argv, prog);
+    } else if (strcmp(argv[1], "interp") == 0) {
+        rc = run_interp(argc, argv, prog);
+    } else if (strcmp(argv[1], "debug") == 0) {
+        rc = run_debug(argc, argv, prog);
+    } else if (strcmp(argv[1], "optimize") == 0) {
+        rc = run_optimize(argc, argv, prog);
+    } else if (strcmp(argv[1], "msl") == 0) {
+        rc = run_msl(argc, argv, prog);
+    } else if (strcmp(argv[1], "ml") == 0) {
+        rc = run_ml(argc, argv, prog);
     } else {
         fprintf(stderr, "%s: unknown command: %s\n", prog, argv[1]);
         print_usage(stderr, prog);

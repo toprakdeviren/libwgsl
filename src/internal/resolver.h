@@ -17,9 +17,9 @@
  * the symbol on read.  Same for `EXPR_TEMPLATED_IDENT` (its
  * children[0] carries the resolution).
  *
- * Phase 5 deliberately does **not** resolve the right-hand side of
- * `obj.field` (member access) — that needs the type of `obj`, which
- * is the type-checker's job in Phase 7.
+ * The resolver deliberately does **not** resolve the right-hand side of
+ * `obj.field` (member access) — that needs the type of `obj`, which is
+ * owned by the type checker.
  *
  * Diagnostic vocabulary:
  *   - "use of undeclared identifier 'X'" — name does not resolve.
@@ -84,11 +84,14 @@ typedef struct WGSLSymbol {
     const char  *name;      /* borrowed (source bytes or static literal) */
     uint32_t     name_len;
     uint16_t     kind;      /* WGSLSymKind */
-    uint16_t     flags;     /* WGSLSymKind */
+    uint16_t     flags;     /* WGSL_SYM_FLAG_* */
 #define WGSL_SYM_FLAG_MUST_USE (1u << 0)
 #define WGSL_SYM_FLAG_VERTEX   (1u << 1)
 #define WGSL_SYM_FLAG_FRAGMENT (1u << 2)
 #define WGSL_SYM_FLAG_COMPUTE  (1u << 3)
+/* Function body typecheck was skipped (stable under a stable module
+ * interface).  Lazy body typing clears this when the body is walked. */
+#define WGSL_SYM_FLAG_BODY_SKIPPED (1u << 4)
 #define WGSL_SYM_FLAG_TYPE_RESOLVING (1u << 8)
     WGSLNode    *ast;       /* declaration node; NULL for predeclared    */
     WGSLTypeInfo *type;     /* resolved type (when applicable)           */
@@ -114,15 +117,22 @@ typedef struct WGSLResolver {
     WGSLScope        *current;     /* function / block scope chain top  */
 
     /* Flat list of every user-declared symbol the resolver bound (any
-     * scope).  Lets later passes (Phase 6 const-eval, Phase 7 type
-     * checker) reverse-look-up `WGSLNode *decl → WGSLSymbol *` without
-     * keeping live scope chains around. */
+     * scope).  Lets later passes reverse-look-up
+     * `WGSLNode *decl → WGSLSymbol *` without keeping live scope chains
+     * around. */
     WGSLSymbol      **all_decls;
     size_t            all_decl_count;
     size_t            all_decl_capacity;
 
+    /* Open-addressed AST-decl-node* → index into all_decls (SIZE_MAX empty).
+     * The key is the declaration AST pointer, not the source name, so legal
+     * duplicate spellings in distinct scopes never alias each other here. */
+    size_t           *decl_htab;
+    size_t            decl_htab_cap;
+
     int               had_error;
     int               in_attribute;  /* 1 while walking inside @attr(…) */
+    int               depth;         /* current walk() recursion depth   */
 } WGSLResolver;
 
 /**
@@ -142,6 +152,17 @@ int wgsl_resolve(
 
 /** Helper: extract the resolved symbol for an `EXPR_IDENT` node. */
 WGSLSymbol *wgsl_node_resolved_symbol(const WGSLNode *ident);
+
+/** O(1) reverse lookup: declaration AST node → its bound symbol. */
+WGSLSymbol *wgsl_resolver_symbol_for_decl(const WGSLResolver *r, const WGSLNode *decl);
+
+/** O(1) reverse lookup: declaration AST node / symbol → all_decls index. */
+int wgsl_resolver_index_for_decl(const WGSLResolver *r, const WGSLNode *decl);
+int wgsl_resolver_index_for_symbol(const WGSLResolver *r, const WGSLSymbol *sym);
+
+/** WGSL spelling of an address space ("storage"/"uniform"/"handle"/…);
+ *  "" for WGSL_AS_NONE.  Reused by reflection JSON. */
+const char *wgsl_address_space_name(WGSLAddressSpace a);
 
 /** Free anything the resolver owns that isn't in the arena. */
 void wgsl_resolver_destroy(WGSLResolver *r);

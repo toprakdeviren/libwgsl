@@ -14,8 +14,11 @@
  * hard-coded here to guarantee spec match independent of vendor's
  * broader whitespace definition.
  *
- * NFC identifier comparison (§3.7.1) is intentionally deferred to
- * Phase 5 (resolver), the first pass that actually compares names.
+ * §3.7.1 Identifier Comparison (pinned CRD): two identifiers are the
+ * same iff they are the same sequence of code points.  The spec Note
+ * explicitly does **not** permit Unicode normalization for comparison,
+ * so the resolver's raw `memcmp` on source UTF-8 bytes is correct.
+ * Vendored `normalize.h` is available but unused for this purpose.
  */
 #ifndef WGSL_INTERNAL_UTF8_H
 #define WGSL_INTERNAL_UTF8_H

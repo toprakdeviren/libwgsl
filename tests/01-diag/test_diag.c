@@ -1,5 +1,5 @@
 /**
- * Phase 1 — diagnostic bag.
+ * Diagnostic bag tests.
  *
  * Covers:
  *   - emit + count + at + has_error progression
@@ -63,6 +63,23 @@ int main(void) {
     CHECK(d0->message    != NULL,                   "d0 message non-null");
     CHECK(strcmp(d0->message, "use of undeclared identifier 'z'") == 0,
           "d0 message rendered");
+
+    /* — UTF-16 columns (LSP position encoding): an astral code point counts
+     *   as 2 UTF-16 units, so a byte column would over-count. — */
+    {
+        /* "var 🎉 = z;" — U+1F389 is 4 UTF-8 bytes / 2 UTF-16 units.  `z` is
+         * at byte offset 11 (var=3, sp, emoji=4, sp, =, sp), UTF-16 col 10. */
+        const char *u_text = "var \xF0\x9F\x8E\x89 = z;\n";
+        WGSLSource us; wgsl_source_init(&us, u_text, strlen(u_text));
+        WGSLDiagBag ub; wgsl_diag_init(&ub);
+        wgsl_diag_emit_at(&ub, &us, WGSL_DIAG_ERROR, 11, 1, NULL, "undeclared 'z'");
+        const WGSLDiagnostic *ud = wgsl_diag_at(&ub, 0);
+        CHECK(ud && ud->line == 1,      "utf16: line 1");
+        CHECK(ud && ud->column == 10,   "utf16: emoji counts as 2 units, not 4 bytes");
+        CHECK(ud && ud->end_column == 11, "utf16: end column");
+        wgsl_diag_destroy(&ub);
+        wgsl_source_destroy(&us);
+    }
 
     /* Emit a warning with a filterable rule. */
     ok = wgsl_diag_emit_at(

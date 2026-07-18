@@ -2,8 +2,7 @@
  * @file ast_dump.h — Human-readable AST printer.
  *
  * Walks an AST rooted at `root` and writes an indented S-expression-ish
- * tree to `out`.  Used by the parser tests and by `wgsl-cli --dump-ast`
- * (added in Phase 9 LSP work).
+ * tree to `out`.  Used by parser tests and by `wgsl-cli --dump-ast`.
  *
  * Source spans are embedded so the dump round-trips back to the byte
  * locations.  Snippet length is clamped to avoid noisy output.

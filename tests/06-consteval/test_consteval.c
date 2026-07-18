@@ -1,5 +1,5 @@
 /**
- * Phase 6 Iter A — const-expression evaluator: scalar folding.
+ * Const-expression evaluator scalar folding tests.
  *
  * Covers:
  *   - integer literal parse: decimal, hex, suffixes (`i`, `u`, none)
@@ -37,7 +37,7 @@ static int fail = 0;
     }                                                                  \
 } while (0)
 
-/* ── Per-test scaffold ──────────────────────────────────────────── */
+/* Per-test harness. */
 
 typedef struct {
     WGSLArena          arena;
@@ -76,7 +76,7 @@ static WGSLNode *parse_expr(TestCtx *t, const char *expr) {
     WGSLNode *let = body->children[0];
     if (!let || let->child_count == 0) return NULL;
     /* DECL_LET has [type?][init].  has_type bit lives at payload[1]. */
-    int has_type = (int)(let->payload[1] & 1u);
+    int has_type = wgsl_letlike_has_type(let);
     return let->children[has_type ? 1 : 0];
 }
 
@@ -97,7 +97,7 @@ static int eval_to(TestCtx *t, const char *expr, WGSLValue *out) {
     return wgsl_consteval_expr(&t->cev, n, out);
 }
 
-/* ── Convenience checkers ───────────────────────────────────────── */
+/* Convenience checkers. */
 
 static void check_int(const char *expr, int64_t want, WGSLTypeKind want_t) {
     TestCtx t; WGSLValue v;
@@ -180,7 +180,7 @@ static void check_eval_fails(const char *expr, const char *want_substr) {
 int main(void) {
     wgsl_utf8_init();
 
-    /* ── Integer literals ──────────────────────────────────────── */
+    /* Integer literals. */
     check_int("0",        0,    WGSL_TYPE_ABSTRACT_INT);
     check_int("42",       42,   WGSL_TYPE_ABSTRACT_INT);
     check_int("42i",      42,   WGSL_TYPE_I32);
@@ -189,7 +189,7 @@ int main(void) {
     check_int("0xFFu",    255,  WGSL_TYPE_U32);
     check_int("0X10",     16,   WGSL_TYPE_ABSTRACT_INT);
 
-    /* ── Float literals ────────────────────────────────────────── */
+    /* Float literals. */
     check_float("1.0",    1.0,   WGSL_TYPE_ABSTRACT_FLOAT);
     check_float("1.5f",   1.5,   WGSL_TYPE_F32);
     check_float("2.0h",   2.0,   WGSL_TYPE_F16);
@@ -197,11 +197,11 @@ int main(void) {
     check_float("1.5e2f", 150.0, WGSL_TYPE_F32);
     check_float("0x1p4",  16.0,  WGSL_TYPE_ABSTRACT_FLOAT);
 
-    /* ── Bool literals ─────────────────────────────────────────── */
+    /* Bool literals. */
     check_bool("true",  1);
     check_bool("false", 0);
 
-    /* ── Unary ─────────────────────────────────────────────────── */
+    /* Unary. */
     check_int  ("-5",    -5,   WGSL_TYPE_ABSTRACT_INT);
     check_int  ("-5i",   -5,   WGSL_TYPE_I32);
     check_float("-1.5",  -1.5, WGSL_TYPE_ABSTRACT_FLOAT);
@@ -210,7 +210,7 @@ int main(void) {
     check_bool ("!true", 0);
     check_bool ("!false",1);
 
-    /* ── Binary arithmetic ─────────────────────────────────────── */
+    /* Binary arithmetic. */
     check_int  ("1 + 2",          3,   WGSL_TYPE_ABSTRACT_INT);
     check_int  ("1i + 2i",        3,   WGSL_TYPE_I32);
     check_int  ("4u - 1u",        3,   WGSL_TYPE_U32);
@@ -223,7 +223,7 @@ int main(void) {
     check_float("3.0 * 2.0f",     6.0, WGSL_TYPE_F32);
     check_float("9.0 / 4.0",      2.25,WGSL_TYPE_ABSTRACT_FLOAT);
 
-    /* ── Implicit promotion ────────────────────────────────────── */
+    /* Implicit promotion. */
     /* AbstractInt + AbstractFloat → AbstractFloat */
     check_float("1 + 2.5",        3.5, WGSL_TYPE_ABSTRACT_FLOAT);
     /* AbstractInt + i32 → i32 */
@@ -233,7 +233,7 @@ int main(void) {
     /* AbstractInt + f32 → f32 */
     check_float("1 + 2.5f",       3.5, WGSL_TYPE_F32);
 
-    /* ── Comparisons ───────────────────────────────────────────── */
+    /* Comparisons. */
     check_bool("1 == 1",        1);
     check_bool("1 != 1",        0);
     check_bool("1 < 2",         1);
@@ -244,7 +244,7 @@ int main(void) {
     check_bool("true == true",  1);
     check_bool("true == false", 0);
 
-    /* ── Logical / bitwise ─────────────────────────────────────── */
+    /* Logical / bitwise. */
     check_bool("true && false", 0);
     check_bool("true || false", 1);
     check_int ("0xff & 0x0f",   0x0f, WGSL_TYPE_ABSTRACT_INT);
@@ -253,11 +253,11 @@ int main(void) {
     check_int ("1 << 4",        16,   WGSL_TYPE_ABSTRACT_INT);
     check_int ("16 >> 2",       4,    WGSL_TYPE_ABSTRACT_INT);
 
-    /* ── Paren grouping ────────────────────────────────────────── */
+    /* Paren grouping. */
     check_int  ("(1 + 2) * 3",      9,    WGSL_TYPE_ABSTRACT_INT);
     check_float("(1.0 + 2.0) / 2.0",1.5,  WGSL_TYPE_ABSTRACT_FLOAT);
 
-    /* ── Errors ────────────────────────────────────────────────── */
+    /* Errors. */
     check_eval_fails("-1u",         "u32");
     check_eval_fails("1 / 0",       "division by zero");
     check_eval_fails("1 % 0",       "modulo by zero");
@@ -265,7 +265,7 @@ int main(void) {
     check_eval_fails("1i + 1u",     "no implicit conversion");
     check_eval_fails("1i << 31",    "left shift result out of range for i32");
 
-    /* ── Materialise: default tower ────────────────────────────── */
+    /* Materialise: default tower. */
     {
         TestCtx t; WGSLValue v;
         if (eval_to(&t, "1 + 2", &v)) {
@@ -321,7 +321,7 @@ int main(void) {
         cleanup(&t);
     }
 
-    /* ── §3.5.2 significand truncation ─────────────────────────── *
+    /* §3.5.2 significand truncation.
      *                                                             *
      * Decimal literals keep at most 20 significant digits; hex at *
      * most 16.  Extra significant digits are either truncated or  *

@@ -1,5 +1,5 @@
 /**
- * Phase 3 Round B Iter 1 — function-scope decls + assignment forms.
+ * Function-scope declaration and assignment parser tests.
  *
  * Covers:
  *   - var x: i32 = 1;          (typed + initialized)
@@ -54,8 +54,8 @@ static void done(P *p) {
 }
 
 static int name_eq(const WGSLNode *n, const WGSLSource *s, const char *want) {
-    uint32_t off = (uint32_t)(n->payload[0] & 0xFFFFFFFFu);
-    uint32_t len = (uint32_t)(n->payload[0] >> 32);
+    uint32_t off = wgsl_node_name_span(n).offset;
+    uint32_t len = wgsl_node_name_span(n).length;
     size_t wl = strlen(want);
     if (len != wl) return 0;
     return memcmp(s->bytes + off, want, wl) == 0;
@@ -78,8 +78,8 @@ int main(void) {
         const WGSLNode *s = first_body_stmt(&p.ast);
         CHECK(s->kind == WGSL_NODE_DECL_VAR, "var: kind");
         CHECK(name_eq(s, &p.src, "x"), "var: name = x");
-        uint32_t has_type = (uint32_t)(s->payload[2] & 0xFFFFFFFFu);
-        uint32_t has_init = (uint32_t)(s->payload[2] >> 32);
+        uint32_t has_type = (uint32_t)wgsl_varlike_has_type(s);
+        uint32_t has_init = (uint32_t)wgsl_varlike_has_init(s);
         CHECK(has_type == 1 && has_init == 1, "var: has_type + has_init");
         CHECK(s->child_count == 2, "var: 2 children (type, init)");
         done(&p);
@@ -89,8 +89,8 @@ int main(void) {
         P p; run(&p, "fn t() { var x = 1; }");
         CHECK(p.ok, "var-init-only: ok");
         const WGSLNode *s = first_body_stmt(&p.ast);
-        uint32_t has_type = (uint32_t)(s->payload[2] & 0xFFFFFFFFu);
-        uint32_t has_init = (uint32_t)(s->payload[2] >> 32);
+        uint32_t has_type = (uint32_t)wgsl_varlike_has_type(s);
+        uint32_t has_init = (uint32_t)wgsl_varlike_has_init(s);
         CHECK(has_type == 0 && has_init == 1, "var-init-only: flags");
         CHECK(s->child_count == 1, "var-init-only: 1 child (init)");
         done(&p);
@@ -100,8 +100,8 @@ int main(void) {
         P p; run(&p, "fn t() { var x: i32; }");
         CHECK(p.ok, "var-type-only: ok");
         const WGSLNode *s = first_body_stmt(&p.ast);
-        uint32_t has_type = (uint32_t)(s->payload[2] & 0xFFFFFFFFu);
-        uint32_t has_init = (uint32_t)(s->payload[2] >> 32);
+        uint32_t has_type = (uint32_t)wgsl_varlike_has_type(s);
+        uint32_t has_init = (uint32_t)wgsl_varlike_has_init(s);
         CHECK(has_type == 1 && has_init == 0, "var-type-only: flags");
         CHECK(s->child_count == 1, "var-type-only: 1 child (type)");
         done(&p);
@@ -135,7 +135,7 @@ int main(void) {
         const WGSLNode *s = first_body_stmt(&p.ast);
         CHECK(s->kind == WGSL_NODE_STMT_ASSIGN, "assign: kind");
         CHECK(s->child_count == 2, "assign: 2 children (lhs, rhs)");
-        WGSLTokenKind op = (WGSLTokenKind)s->payload[0];
+        WGSLTokenKind op = (WGSLTokenKind)wgsl_node_op_kind_u32(s);
         CHECK(op == WGSL_TOK_EQUAL, "assign: op = =");
         done(&p);
     }
@@ -159,7 +159,7 @@ int main(void) {
             CHECK(p.ok, "compound: ok");
             const WGSLNode *s = first_body_stmt(&p.ast);
             CHECK(s->kind == WGSL_NODE_STMT_COMPOUND_ASSIGN, "compound: kind");
-            WGSLTokenKind op = (WGSLTokenKind)s->payload[0];
+            WGSLTokenKind op = (WGSLTokenKind)wgsl_node_op_kind_u32(s);
             CHECK(op == cases[i].want_op, "compound: op match");
             done(&p);
         }

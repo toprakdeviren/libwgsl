@@ -1,16 +1,19 @@
 /**
- * Phase 1 sub-deliverable (c):  arena-churn baseline.
+ * Arena-churn baseline.
  *
  * Drives a synthetic workload shaped like a realistic WGSL parse —
  * nested expression trees + function bodies — through the arena, and
  * reports ns-per-alloc, total bytes, and chunks consumed.  The
- * baseline informs whether per-kind pooling is worth adding before
- * Phase 5 (resolver) lands.
+ * baseline informs whether per-kind pooling is worth adding.
  *
  * PASS criterion (smoke):  every alloc returns non-NULL and the
  * counter math adds up.  Timing is printed for the human reader and
- * persisted under `docs/BENCH.md` after the first run.
+ * persisted under `docs/libwgsl.md` after the first run.
  */
+#if !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 #include "internal/arena.h"
 #include "internal/ast.h"
 

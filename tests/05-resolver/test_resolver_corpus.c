@@ -1,5 +1,5 @@
 /**
- * Phase 5 Iter C — resolver across the real shader corpus.
+ * Resolver coverage across the real shader corpus.
  *
  * Mirrors the runtime engine's compilation workflow:
  *   1. `_shared.wgsl` is the global preamble — prepended to every kernel
@@ -203,6 +203,17 @@ static void run_file(
 }
 
 int main(void) {
+    {
+        DIR *_d = opendir(SHADERS_DIR);
+        if (!_d) {
+            fprintf(stderr, "SKIP  %s: %s not present — VACUOUS (no corpus coverage; not a real pass)\n",
+                    __FILE__, SHADERS_DIR);
+            printf("PASS  corpus  VACUOUS (no %s)\n", SHADERS_DIR);
+            return 0;
+        }
+        closedir(_d);
+    }
+
     wgsl_utf8_init();
 
     /* Slurp the shared preamble. */

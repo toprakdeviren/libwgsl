@@ -1,6 +1,6 @@
 /**
- * Phase 7 Iter B — composite expressions: constructors, member access,
- *                  indexing, vec/mat operators, user-fn return type.
+ * Composite expression type-checking: constructors, member access,
+ * indexing, vec/mat operators, and user-function return types.
  *
  * Covers:
  *   - constructors: vec*<T>(args), aliased forms (vec3f, mat4x4f),
@@ -100,7 +100,7 @@ static WGSLSymbol *sym_for(const P *p, const char *want) {
 int main(void) {
     wgsl_utf8_init();
 
-    /* ── Vec constructor (templated form) ─────────────────────── */
+    /* Vec constructor (templated form). */
     {
         P p; run(&p,
             "fn f() {\n"
@@ -114,7 +114,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Vec constructor (predeclared alias form) ─────────────── */
+    /* Vec constructor (predeclared alias form). */
     {
         P p; run(&p,
             "fn f() {\n"
@@ -128,7 +128,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Scalar conversion ────────────────────────────────────── */
+    /* Scalar conversion. */
     {
         P p; run(&p,
             "fn f() {\n"
@@ -141,7 +141,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Mat constructor ──────────────────────────────────────── */
+    /* Mat constructor. */
     {
         P p; run(&p,
             "fn f() {\n"
@@ -156,7 +156,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Constructor partial-eval range checks ───────────────── */
+    /* Constructor partial-eval range checks. */
     {
         P p; run(&p,
             "fn f() {\n"
@@ -192,7 +192,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Vec swizzle ──────────────────────────────────────────── */
+    /* Vec swizzle. */
     {
         P p; run(&p,
             "fn f() {\n"
@@ -241,7 +241,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Struct field access ──────────────────────────────────── */
+    /* Struct field access. */
     {
         P p; run(&p,
             "struct V { pos: vec3<f32>, uv: vec2<f32> }\n"
@@ -260,7 +260,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Indexing ─────────────────────────────────────────────── */
+    /* Indexing. */
     {
         P p; run(&p,
             "fn f() {\n"
@@ -293,7 +293,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Vec/mat binary ops ───────────────────────────────────── */
+    /* Vec/mat binary ops. */
     {
         P p; run(&p,
             "fn f() {\n"
@@ -352,7 +352,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── User function call return type ───────────────────────── */
+    /* User function call return type. */
     {
         P p; run(&p,
             "fn add(a: i32, b: i32) -> i32 { return a + b; }\n"
@@ -365,7 +365,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Function name as value → error ───────────────────────── */
+    /* Function name as value -> error. */
     {
         P p; run(&p,
             "fn add(a: i32, b: i32) -> i32 { return a + b; }\n"
@@ -378,7 +378,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Index into ref'd vec preserves ref-ness ─────────────── */
+    /* Index into ref'd vec preserves ref-ness. */
     {
         P p; run(&p,
             "fn f() {\n"

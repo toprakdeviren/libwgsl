@@ -1,0 +1,8 @@
+{
+  "entry": "main",
+  "len": 4,
+  "ok": true,
+  "buffers": [
+    { "name": "B", "values": ["1", "2", "3", "4"] }
+  ]
+}

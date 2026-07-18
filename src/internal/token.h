@@ -4,14 +4,14 @@
  * Layout: 24 bytes.
  *
  *   offset  size  field
- *   ──────  ────  ─────────────────────────────────────────────
+ *   ------  ----  ---------------------------------------------
  *      0      4   kind            WGSLTokenKind
  *      4      4   span.offset
  *      8      4   span.length
  *     12      4   line            1-based
  *     16      4   column          1-based byte distance from line start
  *     20      4   payload         per-kind extra (literal-suffix flags, …)
- *   ────────────  24 bytes total
+ *   ------------  24 bytes total
  *
  * Tokens are stored contiguously in an arena-backed array.  The
  * `payload` slot carries kind-specific extras such as the numeric
@@ -144,7 +144,7 @@ typedef struct WGSLToken {
     WGSLTokenKind kind;
     WGSLSpan      span;
     uint32_t      line;     /* 1-based */
-    uint32_t      column;   /* 1-based byte distance from line start */
+    uint32_t      column;   /* 1-based UTF-16 code units from line start (LSP) */
     uint32_t      payload;  /* numeric-suffix flags etc.; see above  */
 } WGSLToken;
 

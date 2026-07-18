@@ -1,5 +1,5 @@
 /**
- * Phase 1 sub-deliverable (a):  sizeof(WGSLNode) gate.
+ * `sizeof(WGSLNode)` layout gate.
  *
  * The compile-time guarantee is the `_Static_assert` in
  * `src/internal/ast.h`.  This binary is the runtime confirmation —

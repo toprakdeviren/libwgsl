@@ -1,13 +1,21 @@
 # WGSL §17 builtin metadata used by src/check/exprs.c.
+# Single source of truth → tools/gen-wgsl-builtins.py → builtins.gen.h
 #
 # Format:
 #   builtin <name> <return> <family> <arity> <flags> <special>
+#   texture_matrix
+#   overload <name> <pattern> <return> <flags> <special>   # optional override
 #
 # <return>  is a BR_* enum suffix.
 # <family>  is a PF_* enum suffix.  Non-NONE entries use the generic
 #           T-pattern overload resolver over the leading <arity> args.
 # <flags>   is comma-separated: const,must_use.  Use '-' for no flags.
 # <special> is a BS_* enum suffix for hand-written mixed-shape validators.
+#
+# kBuiltinOverloads is auto-derived from builtin rows via NAME_PATTERN in
+# the generator (name → exact §17 matcher).  Write an `overload` line only
+# to override that mapping or to add an extra pattern for the same name.
+# Texture signatures expand from `texture_matrix` into kTextureOverloads.
 
 # §17.2 Bit reinterpretation.
 builtin bitcast TEMPLATE NONE 0 const,must_use NONE
@@ -182,157 +190,7 @@ builtin quadSwapDiagonal ARG0 NUMERIC_T 1 must_use NONE
 builtin quadSwapX ARG0 NUMERIC_T 1 must_use NONE
 builtin quadSwapY ARG0 NUMERIC_T 1 must_use NONE
 
-# Exact overload rows generated into kBuiltinOverloads.  Texture rows are
-# expanded from texture_matrix into kTextureOverloads by texture kind /
-# dimension / sampler / access mode.
-#
-# Format:
-#   overload <name> <pattern> <return> <flags> <special>
-
-# §17.3 Logical.
-overload all ALL_ANY BOOL const,must_use NONE
-overload any ALL_ANY BOOL const,must_use NONE
-overload select SELECT ARG0 const,must_use NONE
-
-# §17.4 Array.
-overload arrayLength ARRAY_LENGTH U32 must_use NONE
-
-# §17.5 Numeric.
-overload abs T_NUMERIC_1 ARG0 const,must_use NONE
-overload ceil T_FLOAT_1 ARG0 const,must_use NONE
-overload cos T_FLOAT_1 ARG0 const,must_use NONE
-overload cosh T_FLOAT_1 ARG0 const,must_use NONE
-overload exp T_FLOAT_1 ARG0 const,must_use NONE
-overload exp2 T_FLOAT_1 ARG0 const,must_use NONE
-overload floor T_FLOAT_1 ARG0 const,must_use NONE
-overload fract T_FLOAT_1 ARG0 const,must_use NONE
-overload log T_FLOAT_1 ARG0 const,must_use NONE
-overload log2 T_FLOAT_1 ARG0 const,must_use NONE
-overload round T_FLOAT_1 ARG0 const,must_use NONE
-overload sin T_FLOAT_1 ARG0 const,must_use NONE
-overload sinh T_FLOAT_1 ARG0 const,must_use NONE
-overload sqrt T_FLOAT_1 ARG0 const,must_use NONE
-overload tan T_FLOAT_1 ARG0 const,must_use NONE
-overload tanh T_FLOAT_1 ARG0 const,must_use NONE
-overload asin T_FLOAT_1 ARG0 const,must_use NONE
-overload acos T_FLOAT_1 ARG0 const,must_use NONE
-overload atan T_FLOAT_1 ARG0 const,must_use NONE
-overload asinh T_FLOAT_1 ARG0 const,must_use NONE
-overload acosh T_FLOAT_1 ARG0 const,must_use NONE
-overload atanh T_FLOAT_1 ARG0 const,must_use NONE
-overload trunc T_FLOAT_1 ARG0 const,must_use NONE
-overload sign T_SIGN_1 ARG0 const,must_use NONE
-overload inverseSqrt T_FLOAT_1 ARG0 const,must_use NONE
-overload saturate T_FLOAT_1 ARG0 const,must_use NONE
-overload radians T_FLOAT_1 ARG0 const,must_use NONE
-overload degrees T_FLOAT_1 ARG0 const,must_use NONE
-overload normalize VEC_FLOAT_1 ARG0 const,must_use NONE
-overload quantizeToF16 T_F32_1 ARG0 const,must_use NONE
-overload reverseBits T_INTEGER_1 ARG0 const,must_use NONE
-overload countOneBits T_INTEGER_1 ARG0 const,must_use NONE
-overload countLeadingZeros T_INTEGER_1 ARG0 const,must_use NONE
-overload countTrailingZeros T_INTEGER_1 ARG0 const,must_use NONE
-overload firstLeadingBit T_INTEGER_1 ARG0 const,must_use NONE
-overload firstTrailingBit T_INTEGER_1 ARG0 const,must_use NONE
-overload extractBits EXTRACT_BITS ARG0 const,must_use NONE
-overload insertBits INSERT_BITS ARG0 const,must_use NONE
-overload min T_NUMERIC_2 ARG0 const,must_use NONE
-overload max T_NUMERIC_2 ARG0 const,must_use NONE
-overload pow T_FLOAT_2 ARG0 const,must_use NONE
-overload atan2 T_FLOAT_2 ARG0 const,must_use NONE
-overload step T_FLOAT_2 ARG0 const,must_use NONE
-overload ldexp LDEXP ARG0 const,must_use LDEXP
-overload modf T_FLOAT_1 MODF_RESULT const,must_use NONE
-overload frexp T_FLOAT_1 FREXP_RESULT const,must_use NONE
-overload clamp T_NUMERIC_3 ARG0 const,must_use NONE
-overload fma T_FLOAT_3 ARG0 const,must_use NONE
-overload mix MIX ARG0 const,must_use MIX
-overload smoothstep T_FLOAT_3 ARG0 const,must_use NONE
-overload faceForward VEC_FLOAT_3 ARG0 const,must_use NONE
-overload reflect VEC_FLOAT_2 ARG0 const,must_use NONE
-overload refract REFRACT ARG0 const,must_use NONE
-overload dot DOT ARG0_ELEM const,must_use NONE
-overload dot4U8Packed DOT4_U32 U32 const,must_use NONE
-overload dot4I8Packed DOT4_U32 I32 const,must_use NONE
-overload distance T_FLOAT_2 ARG0_ELEM const,must_use NONE
-overload length LENGTH ARG0_ELEM const,must_use NONE
-overload determinant DETERMINANT ARG0_ELEM const,must_use NONE
-overload cross CROSS ARG0 const,must_use NONE
-overload transpose TRANSPOSE ARG0 const,must_use NONE
-
-# §17.6 Derivatives.
-overload dpdx T_F32_1 ARG0 must_use NONE
-overload dpdy T_F32_1 ARG0 must_use NONE
-overload fwidth T_F32_1 ARG0 must_use NONE
-overload dpdxCoarse T_F32_1 ARG0 must_use NONE
-overload dpdyCoarse T_F32_1 ARG0 must_use NONE
-overload fwidthCoarse T_F32_1 ARG0 must_use NONE
-overload dpdxFine T_F32_1 ARG0 must_use NONE
-overload dpdyFine T_F32_1 ARG0 must_use NONE
-overload fwidthFine T_F32_1 ARG0 must_use NONE
-
-		# §17.8 Atomic.
-		overload atomicLoad ATOMIC_LOAD ARG0 - NONE
-overload atomicAdd ATOMIC_RMW ARG0 - NONE
-overload atomicSub ATOMIC_RMW ARG0 - NONE
-overload atomicMax ATOMIC_RMW ARG0 - NONE
-overload atomicMin ATOMIC_RMW ARG0 - NONE
-overload atomicAnd ATOMIC_RMW ARG0 - NONE
-overload atomicOr ATOMIC_RMW ARG0 - NONE
-overload atomicXor ATOMIC_RMW ARG0 - NONE
-overload atomicExchange ATOMIC_RMW ARG0 - NONE
-overload atomicStore ATOMIC_STORE VOID - NONE
-	overload atomicCompareExchangeWeak ATOMIC_CX ATOMIC_CX_RESULT - NONE
-
-# §17.9–10 Pack / unpack.
-overload pack4x8snorm ARG_VEC4F_1 U32 const,must_use NONE
-overload pack4x8unorm ARG_VEC4F_1 U32 const,must_use NONE
-overload pack4xI8 ARG_VEC4I_1 U32 const,must_use NONE
-overload pack4xU8 ARG_VEC4U_1 U32 const,must_use NONE
-overload pack4xI8Clamp ARG_VEC4I_1 U32 const,must_use NONE
-overload pack4xU8Clamp ARG_VEC4U_1 U32 const,must_use NONE
-overload pack2x16snorm ARG_VEC2F_1 U32 const,must_use NONE
-overload pack2x16unorm ARG_VEC2F_1 U32 const,must_use NONE
-overload pack2x16float ARG_VEC2F_1 U32 const,must_use NONE
-overload unpack4x8snorm ARG_U32_1 VEC4F const,must_use NONE
-overload unpack4x8unorm ARG_U32_1 VEC4F const,must_use NONE
-overload unpack4xI8 ARG_U32_1 VEC4I const,must_use NONE
-overload unpack4xU8 ARG_U32_1 VEC4U const,must_use NONE
-overload unpack2x16snorm ARG_U32_1 VEC2F const,must_use NONE
-overload unpack2x16unorm ARG_U32_1 VEC2F const,must_use NONE
-overload unpack2x16float ARG_U32_1 VEC2F const,must_use NONE
-
-# §17.11 Synchronization.
-overload storageBarrier VOID_0 VOID - NONE
-overload textureBarrier VOID_0 VOID - NONE
-overload workgroupBarrier VOID_0 VOID - NONE
-overload workgroupUniformLoad WORKGROUP_UNIFORM_LOAD ARG0 must_use NONE
-
-# §17.12 Subgroup.
-overload subgroupAdd T_NUMERIC_1 ARG0 must_use NONE
-overload subgroupMul T_NUMERIC_1 ARG0 must_use NONE
-overload subgroupMax T_NUMERIC_1 ARG0 must_use NONE
-overload subgroupMin T_NUMERIC_1 ARG0 must_use NONE
-overload subgroupAnd T_INTEGER_1 ARG0 must_use NONE
-overload subgroupOr T_INTEGER_1 ARG0 must_use NONE
-overload subgroupXor T_INTEGER_1 ARG0 must_use NONE
-overload subgroupExclusiveAdd T_NUMERIC_1 ARG0 must_use NONE
-overload subgroupExclusiveMul T_NUMERIC_1 ARG0 must_use NONE
-overload subgroupInclusiveAdd T_NUMERIC_1 ARG0 must_use NONE
-overload subgroupInclusiveMul T_NUMERIC_1 ARG0 must_use NONE
-overload subgroupBroadcast T_NUMERIC_U32_2 ARG0 must_use NONE
-overload subgroupBroadcastFirst T_NUMERIC_1 ARG0 must_use NONE
-overload subgroupShuffle T_NUMERIC_U32_2 ARG0 must_use NONE
-overload subgroupShuffleDown T_NUMERIC_U32_2 ARG0 must_use NONE
-overload subgroupShuffleUp T_NUMERIC_U32_2 ARG0 must_use NONE
-overload subgroupShuffleXor T_NUMERIC_U32_2 ARG0 must_use NONE
-overload subgroupBallot BOOL_1 VEC4U must_use NONE
-overload subgroupAll BOOL_1 BOOL must_use NONE
-overload subgroupAny BOOL_1 BOOL must_use NONE
-overload subgroupElect VOID_0 BOOL must_use NONE
-
-# §17.13 Quad.
-overload quadBroadcast T_NUMERIC_U32_2 ARG0 must_use NONE
-overload quadSwapDiagonal T_NUMERIC_1 ARG0 must_use NONE
-overload quadSwapX T_NUMERIC_1 ARG0 must_use NONE
-overload quadSwapY T_NUMERIC_1 ARG0 must_use NONE
+# Overload rows (kBuiltinOverloads) are auto-derived by the generator from
+# the `builtin` rows above via NAME_PATTERN.  Optional `overload` lines may
+# be added here to override or extend that mapping.  Texture rows come from
+# `texture_matrix` above.

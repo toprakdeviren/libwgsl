@@ -1,0 +1,221 @@
+# fnv=d8d0468afc1e4cd9 lines=220 cases=72 ok=55 fail=17
+abs(1)|acc=1|ret=AbstractInt|const=1
+abs(1.0)|acc=1|ret=AbstractFloat|const=1
+abs(1u)|acc=1|ret=u32|const=1
+abs(vec3f(1.0))|acc=1|ret=vec3<f32>|const=1
+abs(true)|acc=0|ret=bool|const=1
+min(1, 2)|acc=1|ret=AbstractInt|const=1
+min(1.0, 2.0)|acc=1|ret=AbstractFloat|const=1
+min(1, 2.0)|acc=1|ret=AbstractFloat|const=1
+min(1)|acc=0|ret=AbstractInt|const=1
+max(vec2i(1,2), vec2i(3,4))|acc=1|ret=vec2<i32>|const=1
+clamp(1, 0, 2)|acc=1|ret=AbstractInt|const=1
+clamp(1.0, 0.0, 2.0)|acc=1|ret=AbstractFloat|const=1
+clamp(1, 0)|acc=0|ret=AbstractInt|const=1
+sin(1.0)|acc=1|ret=AbstractFloat|const=1
+sin(1)|acc=1|ret=AbstractFloat|const=1
+sin(1u)|acc=0|ret=u32|const=1
+sin(vec2f(0.0))|acc=1|ret=vec2<f32>|const=1
+pow(2.0, 3.0)|acc=1|ret=AbstractFloat|const=1
+pow(2, 3)|acc=1|ret=AbstractFloat|const=1
+atan2(1.0, 2.0)|acc=1|ret=AbstractFloat|const=1
+log2(32)|acc=1|ret=AbstractFloat|const=1
+log2(32u)|acc=0|ret=u32|const=1
+countOneBits(0xFu)|acc=1|ret=u32|const=1
+countOneBits(1.0)|acc=0|ret=AbstractFloat|const=1
+reverseBits(1u)|acc=1|ret=u32|const=1
+extractBits(0xFFu, 0u, 4u)|acc=1|ret=u32|const=1
+insertBits(0u, 0xFu, 4u, 4u)|acc=1|ret=u32|const=1
+sign(1)|acc=1|ret=AbstractInt|const=1
+sign(1.0)|acc=1|ret=AbstractFloat|const=1
+sign(1u)|acc=0|ret=u32|const=1
+select(1, 2, true)|acc=1|ret=AbstractInt|const=1
+select(1.0, 2.0, false)|acc=1|ret=AbstractFloat|const=1
+select(1, 2, 3)|acc=0|ret=AbstractInt|const=1
+any(true)|acc=1|ret=bool|const=1
+any(vec3(true, false, true))|acc=1|ret=bool|const=1
+all(vec2(true, true))|acc=1|ret=bool|const=1
+all(1)|acc=0|ret=AbstractInt|const=1
+dot(vec3f(1,2,3), vec3f(4,5,6))|acc=1|ret=f32|const=1
+dot(1.0, 2.0)|acc=0|ret=AbstractFloat|const=1
+cross(vec3f(1,0,0), vec3f(0,1,0))|acc=1|ret=vec3<f32>|const=1
+cross(vec2f(1,0), vec2f(0,1))|acc=0|ret=vec2<f32>|const=1
+length(vec3f(3,4,0))|acc=1|ret=f32|const=1
+length(3.0)|acc=1|ret=AbstractFloat|const=1
+normalize(vec3f(0,3,4))|acc=1|ret=vec3<f32>|const=1
+normalize(1.0)|acc=0|ret=AbstractFloat|const=1
+distance(vec2f(0,0), vec2f(3,4))|acc=1|ret=f32|const=1
+reflect(vec3f(1,0,0), vec3f(0,1,0))|acc=1|ret=vec3<f32>|const=1
+faceForward(vec3f(1,0,0), vec3f(0,1,0), vec3f(0,0,1))|acc=1|ret=vec3<f32>|const=1
+refract(vec3f(1,0,0), vec3f(0,1,0), 0.5)|acc=1|ret=vec3<f32>|const=1
+transpose(mat2x3f(1,2,3,4,5,6))|acc=1|ret=mat3x2<f32>|const=1
+determinant(mat2x2f(1,2,3,4))|acc=1|ret=f32|const=1
+determinant(mat2x3f(1,2,3,4,5,6))|acc=0|ret=mat2x3<f32>|const=1
+mix(1.0, 2.0, 0.5)|acc=1|ret=AbstractFloat|const=1
+mix(vec3f(1,2,3), vec3f(4,5,6), 0.5)|acc=1|ret=vec3<f32>|const=1
+ldexp(1.0, 2)|acc=1|ret=AbstractFloat|const=1
+ldexp(1.0, 2u)|acc=0|ret=AbstractFloat|const=1
+frexp(1.5)|acc=1|ret=__frexp_result|const=1
+modf(1.5)|acc=1|ret=__modf_result|const=1
+pack4x8unorm(vec4f(1,0,0,0))|acc=1|ret=u32|const=1
+pack4x8unorm(1.0)|acc=0|ret=AbstractFloat|const=1
+unpack4x8unorm(255u)|acc=1|ret=vec4<f32>|const=1
+unpack4x8unorm(1.0)|acc=0|ret=AbstractFloat|const=1
+dot4U8Packed(1u, 2u)|acc=1|ret=u32|const=1
+abs(1.0h)|acc=1|ret=f16|const=1
+sin(1.0h)|acc=1|ret=f16|const=1
+workgroupBarrier()|acc=1|ret=void|const=0
+storageBarrier()|acc=1|ret=void|const=0
+arrayLength(&x)|acc=1|ret=u32|const=0
+subgroupAdd(1u)|acc=1|ret=u32|const=0
+subgroupAdd(1u)|acc=0|ret=u32|const=0
+subgroupMax(vec2u(1,2))|acc=1|ret=vec2<u32>|const=0
+bitcast(1i)|acc=1|ret=i32|const=1
+#table_count=146
+T|abs|const=1|cfold=7
+T|acos|const=1|cfold=6
+T|acosh|const=1|cfold=6
+T|all|const=1|cfold=5
+T|any|const=1|cfold=5
+T|arrayLength|const=0|cfold=0
+T|asin|const=1|cfold=6
+T|asinh|const=1|cfold=6
+T|atan|const=1|cfold=6
+T|atan2|const=1|cfold=8
+T|atanh|const=1|cfold=6
+T|atomicAdd|const=0|cfold=0
+T|atomicAnd|const=0|cfold=0
+T|atomicCompareExchangeWeak|const=0|cfold=0
+T|atomicExchange|const=0|cfold=0
+T|atomicLoad|const=0|cfold=0
+T|atomicMax|const=0|cfold=0
+T|atomicMin|const=0|cfold=0
+T|atomicOr|const=0|cfold=0
+T|atomicStore|const=0|cfold=0
+T|atomicSub|const=0|cfold=0
+T|atomicXor|const=0|cfold=0
+T|bitcast|const=1|cfold=1
+T|ceil|const=1|cfold=6
+T|clamp|const=1|cfold=9
+T|cos|const=1|cfold=6
+T|cosh|const=1|cfold=6
+T|countLeadingZeros|const=1|cfold=21
+T|countOneBits|const=1|cfold=21
+T|countTrailingZeros|const=1|cfold=21
+T|cross|const=1|cfold=13
+T|degrees|const=1|cfold=6
+T|determinant|const=1|cfold=19
+T|distance|const=1|cfold=12
+T|dot|const=1|cfold=12
+T|dot4I8Packed|const=1|cfold=4
+T|dot4U8Packed|const=1|cfold=4
+T|dpdx|const=0|cfold=0
+T|dpdxCoarse|const=0|cfold=0
+T|dpdxFine|const=0|cfold=0
+T|dpdy|const=0|cfold=0
+T|dpdyCoarse|const=0|cfold=0
+T|dpdyFine|const=0|cfold=0
+T|exp|const=1|cfold=6
+T|exp2|const=1|cfold=6
+T|extractBits|const=1|cfold=20
+T|faceForward|const=1|cfold=16
+T|firstLeadingBit|const=1|cfold=21
+T|firstTrailingBit|const=1|cfold=21
+T|floor|const=1|cfold=6
+T|fma|const=1|cfold=9
+T|fract|const=1|cfold=6
+T|frexp|const=1|cfold=23
+T|fwidth|const=0|cfold=0
+T|fwidthCoarse|const=0|cfold=0
+T|fwidthFine|const=0|cfold=0
+T|insertBits|const=1|cfold=20
+T|inverseSqrt|const=1|cfold=6
+T|ldexp|const=1|cfold=10
+T|length|const=1|cfold=11
+T|log|const=1|cfold=6
+T|log2|const=1|cfold=6
+T|max|const=1|cfold=8
+T|min|const=1|cfold=8
+T|mix|const=1|cfold=9
+T|modf|const=1|cfold=23
+T|normalize|const=1|cfold=14
+T|pack2x16float|const=1|cfold=2
+T|pack2x16snorm|const=1|cfold=2
+T|pack2x16unorm|const=1|cfold=2
+T|pack4x8snorm|const=1|cfold=2
+T|pack4x8unorm|const=1|cfold=2
+T|pack4xI8|const=1|cfold=2
+T|pack4xI8Clamp|const=1|cfold=2
+T|pack4xU8|const=1|cfold=2
+T|pack4xU8Clamp|const=1|cfold=2
+T|pow|const=1|cfold=8
+T|quadBroadcast|const=0|cfold=0
+T|quadSwapDiagonal|const=0|cfold=0
+T|quadSwapX|const=0|cfold=0
+T|quadSwapY|const=0|cfold=0
+T|quantizeToF16|const=1|cfold=6
+T|radians|const=1|cfold=6
+T|reflect|const=1|cfold=15
+T|refract|const=1|cfold=17
+T|reverseBits|const=1|cfold=21
+T|round|const=1|cfold=6
+T|saturate|const=1|cfold=6
+T|select|const=1|cfold=22
+T|sign|const=1|cfold=7
+T|sin|const=1|cfold=6
+T|sinh|const=1|cfold=6
+T|smoothstep|const=1|cfold=9
+T|sqrt|const=1|cfold=6
+T|step|const=1|cfold=8
+T|storageBarrier|const=0|cfold=0
+T|subgroupAdd|const=0|cfold=0
+T|subgroupAll|const=0|cfold=0
+T|subgroupAnd|const=0|cfold=0
+T|subgroupAny|const=0|cfold=0
+T|subgroupBallot|const=0|cfold=0
+T|subgroupBroadcast|const=0|cfold=0
+T|subgroupBroadcastFirst|const=0|cfold=0
+T|subgroupElect|const=0|cfold=0
+T|subgroupExclusiveAdd|const=0|cfold=0
+T|subgroupExclusiveMul|const=0|cfold=0
+T|subgroupInclusiveAdd|const=0|cfold=0
+T|subgroupInclusiveMul|const=0|cfold=0
+T|subgroupMax|const=0|cfold=0
+T|subgroupMin|const=0|cfold=0
+T|subgroupMul|const=0|cfold=0
+T|subgroupOr|const=0|cfold=0
+T|subgroupShuffle|const=0|cfold=0
+T|subgroupShuffleDown|const=0|cfold=0
+T|subgroupShuffleUp|const=0|cfold=0
+T|subgroupShuffleXor|const=0|cfold=0
+T|subgroupXor|const=0|cfold=0
+T|tan|const=1|cfold=6
+T|tanh|const=1|cfold=6
+T|textureBarrier|const=0|cfold=0
+T|textureDimensions|const=0|cfold=0
+T|textureGather|const=0|cfold=0
+T|textureGatherCompare|const=0|cfold=0
+T|textureLoad|const=0|cfold=0
+T|textureNumLayers|const=0|cfold=0
+T|textureNumLevels|const=0|cfold=0
+T|textureNumSamples|const=0|cfold=0
+T|textureSample|const=0|cfold=0
+T|textureSampleBaseClampToEdge|const=0|cfold=0
+T|textureSampleBias|const=0|cfold=0
+T|textureSampleCompare|const=0|cfold=0
+T|textureSampleCompareLevel|const=0|cfold=0
+T|textureSampleGrad|const=0|cfold=0
+T|textureSampleLevel|const=0|cfold=0
+T|textureStore|const=0|cfold=0
+T|transpose|const=1|cfold=18
+T|trunc|const=1|cfold=6
+T|unpack2x16float|const=1|cfold=3
+T|unpack2x16snorm|const=1|cfold=3
+T|unpack2x16unorm|const=1|cfold=3
+T|unpack4x8snorm|const=1|cfold=3
+T|unpack4x8unorm|const=1|cfold=3
+T|unpack4xI8|const=1|cfold=3
+T|unpack4xU8|const=1|cfold=3
+T|workgroupBarrier|const=0|cfold=0
+T|workgroupUniformLoad|const=0|cfold=0
+#const_builtins=81

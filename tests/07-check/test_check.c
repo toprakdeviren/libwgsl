@@ -1,5 +1,5 @@
 /**
- * Phase 7 Iter A — type checker scalar foundation.
+ * Type-checker scalar foundation tests.
  *
  * Covers:
  *   - type-spec resolution: scalar / vec<T> / mat<T> / atomic<T> /
@@ -26,6 +26,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int fail = 0;
@@ -89,6 +90,26 @@ static int has_error_with(const WGSLDiagBag *b, const char *needle) {
     return 0;
 }
 
+static char *build_large_struct_source(uint32_t fields, int duplicate_last) {
+    size_t cap = 64u + (size_t)fields * 32u;
+    char *src = (char *)malloc(cap);
+    if (!src) return NULL;
+    size_t pos = 0;
+    int n = snprintf(src + pos, cap - pos, "struct S {\n");
+    if (n < 0 || (size_t)n >= cap - pos) { free(src); return NULL; }
+    pos += (size_t)n;
+    for (uint32_t i = 0; i < fields; i++) {
+        uint32_t name_ix = (duplicate_last && i + 1u == fields) ? 0u : i;
+        n = snprintf(src + pos, cap - pos, "  f%u: i32%s\n",
+                     (unsigned)name_ix, i + 1u < fields ? "," : "");
+        if (n < 0 || (size_t)n >= cap - pos) { free(src); return NULL; }
+        pos += (size_t)n;
+    }
+    n = snprintf(src + pos, cap - pos, "}\n");
+    if (n < 0 || (size_t)n >= cap - pos) { free(src); return NULL; }
+    return src;
+}
+
 /* Find the symbol with the given name across resolver's all_decls. */
 static WGSLSymbol *sym_for(const P *p, const char *want) {
     size_t wl = strlen(want);
@@ -107,8 +128,8 @@ static const WGSLNode *find_ident(
 {
     if (!n) return NULL;
     if (n->kind == WGSL_NODE_EXPR_IDENT) {
-        uint32_t off = (uint32_t)(n->payload[0] & 0xFFFFFFFFu);
-        uint32_t len = (uint32_t)(n->payload[0] >> 32);
+        uint32_t off = wgsl_node_name_span(n).offset;
+        uint32_t len = wgsl_node_name_span(n).length;
         if (len == strlen(want) &&
             memcmp(src->bytes + off, want, len) == 0)
         {
@@ -144,6 +165,7 @@ int main(void) {
 #include "test_check_cases/expressions.inc"
 #include "test_check_cases/statements_attrs_entry.inc"
 #include "test_check_cases/builtins_grammar.inc"
+#include "test_check_cases/a6_cev_status.inc"
     fprintf(stderr, "%s  test_check  (%d failure%s)\n",
             fail ? "FAIL" : "PASS", fail, fail == 1 ? "" : "s");
     return fail ? 1 : 0;

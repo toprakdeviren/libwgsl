@@ -1,5 +1,5 @@
 /**
- * @file validate.c — WGSL validator driver (Phase 8).
+ * @file validate.c — WGSL validator driver.
  *
  * Slim driver that ties together the validator's split translation
  * units:
@@ -28,7 +28,7 @@
 #include "internal/ast.h"
 #include "internal/layout.h"
 
-/* ── Diagnostics ───────────────────────────────────────────────────── */
+/* Diagnostics. */
 
 void wgsl_val_error(
     WGSLValidator *v, const WGSLNode *at, const char *fmt, ...)
@@ -66,17 +66,13 @@ void wgsl_val_filterable(
      * diagnostic or downgraded it to info/warning. */
 }
 
-/* ── Symbol → all_decls index ──────────────────────────────────────── */
+/* Symbol -> all_decls index. */
 
 int wgsl_val_sym_index(const WGSLValidator *v, const WGSLSymbol *s) {
-    if (!v->res) return -1;
-    for (size_t i = 0; i < v->res->all_decl_count; i++) {
-        if (v->res->all_decls[i] == s) return (int)i;
-    }
-    return -1;
+    return v ? wgsl_resolver_index_for_symbol(v->res, s) : -1;
 }
 
-/* ── Generic cycle DFS ─────────────────────────────────────────────── */
+/* Generic cycle DFS. */
 
 /* Color / EdgeCb / EdgeEnum typedefs moved to internal/validate_priv.h
  * for cross-file sharing with access.c (analyze_static_access) and
@@ -146,7 +142,7 @@ int wgsl_val_run_cycle_check(
     return !cx.had_cycle;
 }
 
-/* ── Edge enumerators ──────────────────────────────────────────────── */
+/* Edge enumerators. */
 
 static int pick_function(const WGSLSymbol *s) { return s->kind == WGSL_SYM_FUNCTION; }
 static int pick_struct  (const WGSLSymbol *s) { return s->kind == WGSL_SYM_STRUCT;   }
@@ -248,7 +244,7 @@ static WGSLSymbol *resolve_typespec_struct(
         {
             return resolve_typespec_struct(v, tspec->children[1]);
         }
-        /* vec / mat element types are scalars in v1 — no struct.       */
+        /* vec / mat element types are scalars, so no struct cycle. */
         /* atomic / ptr — wrappers, but their subjects can't be struct
          * (per spec), so safe to ignore. */
         return NULL;
@@ -272,7 +268,7 @@ static void enum_struct_edges(
     for (uint32_t i = 0; i < sd->child_count; i++) {
         WGSLNode *m = sd->children[i];
         if (!m || m->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
-        uint32_t attrs = (uint32_t)(m->payload[1] & 0xFFFFFFFFu);
+        uint32_t attrs = wgsl_member_attr_count(m);
         if (attrs >= m->child_count) continue;
         WGSLNode *tspec = m->children[attrs];
         WGSLSymbol *target = resolve_typespec_struct(v, tspec);
@@ -333,7 +329,7 @@ static void scan_member_attr_value_refs(
     int want_const, int want_struct)
 {
     if (!m || m->kind != WGSL_NODE_DECL_STRUCT_MEMBER) return;
-    uint32_t attrs = (uint32_t)(m->payload[1] & 0xFFFFFFFFu);
+    uint32_t attrs = wgsl_member_attr_count(m);
     for (uint32_t i = 0; i < attrs && i < m->child_count; i++) {
         WGSLNode *attr = m->children[i];
         if (!attr || attr->kind != WGSL_NODE_ATTRIBUTE) continue;
@@ -358,7 +354,7 @@ static void enum_const_edges(
     if (s->kind != WGSL_SYM_CONST) return;
     /* DECL_CONST children = [type? init].  Use payload[1] low bit
      * for has_type. */
-    int has_type = (int)(cd->payload[1] & 1u);
+    int has_type = wgsl_letlike_has_type(cd);
     if ((uint32_t)(has_type ? 2 : 1) > cd->child_count) return;
     WGSLNode *init = cd->children[has_type ? 1 : 0];
     scan_const_struct_refs(v, init, cb, ctx, 1, 1);
@@ -388,9 +384,9 @@ static void enum_override_edges(
     if (!od) return;
     /* DECL_OVERRIDE: [attrs (count A)][type?][init?].  payload[2] =
      * has_type | has_init<<32; payload[1] = attr_count (low). */
-    uint32_t A = (uint32_t)(od->payload[1] & 0xFFFFFFFFu);
-    int has_type = (int)(od->payload[2] & 1u);
-    int has_init = (int)(od->payload[2] >> 32);
+    uint32_t A = wgsl_varlike_attr_count(od);
+    int has_type = wgsl_varlike_has_type(od);
+    int has_init = wgsl_varlike_has_init(od);
     if (!has_init) return;
     uint32_t init_idx = A + (has_type ? 1u : 0u);
     if (init_idx >= od->child_count) return;
@@ -422,10 +418,10 @@ static void enum_module_var_edges(
     /* DECL_VAR: [attrs (count A)][template args (tpl_count)][type?][init?].
      * payload[1] = attr_count (low) | tpl_count (high);
      * payload[2] = has_type | has_init<<32. */
-    uint32_t A   = (uint32_t)(vd->payload[1] & 0xFFFFFFFFu);
-    uint32_t TPL = (uint32_t)(vd->payload[1] >> 32);
-    int has_type = (int)(vd->payload[2] & 1u);
-    int has_init = (int)(vd->payload[2] >> 32);
+    uint32_t A   = wgsl_varlike_attr_count(vd);
+    uint32_t TPL = wgsl_varlike_tpl_count(vd);
+    int has_type = wgsl_varlike_has_type(vd);
+    int has_init = wgsl_varlike_has_init(vd);
     if (!has_init) return;
     uint32_t init_idx = A + TPL + (has_type ? 1u : 0u);
     if (init_idx >= vd->child_count) return;
@@ -466,15 +462,15 @@ static void enum_value_edges(
     WGSLNode *d = s->ast;
     switch ((WGSLSymKind)s->kind) {
     case WGSL_SYM_CONST: {
-        int has_type = (int)(d->payload[1] & 1u);
+        int has_type = wgsl_letlike_has_type(d);
         if ((uint32_t)(has_type ? 2 : 1) > d->child_count) return;
         scan_value_refs(v, d->children[has_type ? 1 : 0], cb, ctx);
         return;
     }
     case WGSL_SYM_OVERRIDE: {
-        uint32_t A = (uint32_t)(d->payload[1] & 0xFFFFFFFFu);
-        int has_type = (int)(d->payload[2] & 1u);
-        int has_init = (int)(d->payload[2] >> 32);
+        uint32_t A = wgsl_varlike_attr_count(d);
+        int has_type = wgsl_varlike_has_type(d);
+        int has_init = wgsl_varlike_has_init(d);
         if (!has_init) return;
         uint32_t init_idx = A + (has_type ? 1u : 0u);
         if (init_idx >= d->child_count) return;
@@ -482,10 +478,10 @@ static void enum_value_edges(
         return;
     }
     case WGSL_SYM_VAR: {
-        uint32_t A   = (uint32_t)(d->payload[1] & 0xFFFFFFFFu);
-        uint32_t TPL = (uint32_t)(d->payload[1] >> 32);
-        int has_type = (int)(d->payload[2] & 1u);
-        int has_init = (int)(d->payload[2] >> 32);
+        uint32_t A   = wgsl_varlike_attr_count(d);
+        uint32_t TPL = wgsl_varlike_tpl_count(d);
+        int has_type = wgsl_varlike_has_type(d);
+        int has_init = wgsl_varlike_has_init(d);
         if (!has_init) return;
         uint32_t init_idx = A + TPL + (has_type ? 1u : 0u);
         if (init_idx >= d->child_count) return;
@@ -583,7 +579,7 @@ static void run_xkind_value_cycle(WGSLValidator *v) {
 }
 
 
-/* ── Public entry ──────────────────────────────────────────────────── */
+/* Public entry. */
 
 /* Per-decl × stage access bitsets, one for reads and one for writes.
  * §14.5 operation classification distinguishes the two so that, e.g.,
@@ -698,6 +694,20 @@ int wgsl_validate(
 
     if (!ast->root) return 0;
 
+    /* Refuse to run the recursive validators on a pathologically deep AST
+     * (e.g. a long `a+a+…` chain or deep block nesting); they would
+     * otherwise overflow the stack.  One diagnostic, then skip the pass. */
+    {
+        const WGSLNode *deep =
+            wgsl_ast_first_over_depth(ast->root, WGSL_MAX_AST_DEPTH);
+        if (deep) {
+            wgsl_val_error(out, deep,
+                "expression or statement nested too deeply (max %d) — "
+                "validation skipped", WGSL_MAX_AST_DEPTH);
+            return 0;
+        }
+    }
+
     wgsl_val_run_cycle_check(out, pick_function,   wgsl_val_enum_call_edges,        "recursion");
     wgsl_val_run_cycle_check(out, pick_struct,     enum_struct_edges,      "struct cycle");
     wgsl_val_run_cycle_check(out, pick_alias,      enum_alias_edges,       "alias cycle");
@@ -730,9 +740,6 @@ void wgsl_validator_destroy(WGSLValidator *v) {
 
 
 WGSLSymbol *wgsl_val_find_symbol_for_ast(const WGSLValidator *v, const WGSLNode *ast) {
-    if (!v->res || !ast) return NULL;
-    for (size_t i = 0; i < v->res->all_decl_count; i++) {
-        if (v->res->all_decls[i]->ast == ast) return v->res->all_decls[i];
-    }
-    return NULL;
+    if (!v || !v->res || !ast) return NULL;
+    return wgsl_resolver_symbol_for_decl(v->res, ast);
 }

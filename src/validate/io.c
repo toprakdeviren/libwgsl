@@ -29,23 +29,84 @@
  * and each `@builtin(name)` so duplicates / shape mismatches can fire.
  *
  * §13.3.1.3 says "no two inputs share @location" AND "no two outputs
- * share @location" — but inputs and outputs are independent.  Keep
- * the bitsets separate. */
+ * share @location" — but inputs and outputs are independent.
+ *
+ * Previous form used a uint64 bitset (0..63 only) + fixed [16] builtin arrays;
+ * values outside those windows silently skipped uniqueness checks.
+ * Not a WGSL hard max — pure analysis buffer. Growable lists now. */
 typedef struct {
     const char *name;
     uint32_t len;
 } SeenBuiltin;
 
 typedef struct {
-    uint64_t   in_locations;   /* bitset over input  @location values  */
-    uint64_t   out_locations;  /* bitset over output @location values  */
-    /* Seen @builtin names (name span pointers into v->src).  16 is
-     * plenty for any single entry point's IO surface. */
-    SeenBuiltin seen_in_builtins[16];
-    SeenBuiltin seen_out_builtins[16];
-    int        seen_in_n;
-    int        seen_out_n;
+    int64_t *locs;
+    int n, cap;
+} LocSet;
+
+typedef struct {
+    SeenBuiltin *items;
+    int n, cap;
+} BuiltinSet;
+
+typedef struct {
+    LocSet     in_locations;
+    LocSet     out_locations;
+    BuiltinSet seen_in_builtins;
+    BuiltinSet seen_out_builtins;
 } IOState;
+
+static void locset_free(LocSet *s) {
+    free(s->locs);
+    s->locs = NULL; s->n = 0; s->cap = 0;
+}
+static void builtinset_free(BuiltinSet *s) {
+    free(s->items);
+    s->items = NULL; s->n = 0; s->cap = 0;
+}
+static void iostate_free(IOState *io) {
+    locset_free(&io->in_locations);
+    locset_free(&io->out_locations);
+    builtinset_free(&io->seen_in_builtins);
+    builtinset_free(&io->seen_out_builtins);
+}
+
+/* Returns 1 if newly added, 0 if already present (duplicate).
+ * On OOM returns -1 (caller should treat as analysis failure). */
+static int locset_add(LocSet *s, int64_t l) {
+    for (int i = 0; i < s->n; i++) {
+        if (s->locs[i] == l) return 0;
+    }
+    if (s->n == s->cap) {
+        int nc = s->cap ? s->cap * 2 : 8;
+        int64_t *g = (int64_t *)realloc(s->locs, (size_t)nc * sizeof *g);
+        if (!g) return -1;
+        s->locs = g;
+        s->cap = nc;
+    }
+    s->locs[s->n++] = l;
+    return 1;
+}
+
+/* Returns 1 if newly added, 0 if duplicate, -1 on OOM. */
+static int builtinset_add(BuiltinSet *s, const char *nm, uint32_t len) {
+    for (int i = 0; i < s->n; i++) {
+        if (s->items[i].len == len && memcmp(s->items[i].name, nm, len) == 0)
+            return 0;
+    }
+    if (s->n == s->cap) {
+        int nc = s->cap ? s->cap * 2 : 8;
+        SeenBuiltin *g = (SeenBuiltin *)realloc(
+            s->items, (size_t)nc * sizeof *g);
+        if (!g) return -1;
+        s->items = g;
+        s->cap = nc;
+    }
+    s->items[s->n].name = nm;
+    s->items[s->n].len = len;
+    s->n += 1;
+    return 1;
+}
 
 static int builtin_type_matches(
     const WGSLValidator *v, const WGSLTypeInfo *t, BuiltinTypeHint hint)
@@ -100,8 +161,8 @@ static int attr_arg_name_eq(
     if (!attr || arg_index >= attr->child_count) return 0;
     const WGSLNode *arg = attr->children[arg_index];
     if (!arg || arg->kind != WGSL_NODE_EXPR_IDENT) return 0;
-    uint32_t off = (uint32_t)(arg->payload[0] & 0xFFFFFFFFu);
-    uint32_t len = (uint32_t)(arg->payload[0] >> 32);
+    uint32_t off = wgsl_node_name_span(arg).offset;
+    uint32_t len = wgsl_node_name_span(arg).length;
     size_t wl = strlen(want);
     return len == wl && memcmp(v->src->bytes + off, want, wl) == 0;
 }
@@ -181,14 +242,25 @@ static void check_io_slot(
          * as a duplicate.  The dual-source struct shape itself is
          * validated separately in `check_io_type`. */
         WGSLNode *bs_attr_for_loc = wgsl_val_find_attr(v, attr_parent, attr_first, attr_count, "blend_src");
-        if (loc_is_int && l >= 0 && l < 64 && !bs_attr_for_loc) {
-            uint64_t *bs = is_input ? &io->in_locations : &io->out_locations;
-            if (*bs & (1ull << l)) {
+        /* Any non-negative @location participates in uniqueness (§13.3.1.3).
+         * Negative values are not a legal location index. */
+        if (loc_is_int && !bs_attr_for_loc) {
+            if (l < 0) {
                 wgsl_val_error(v, loc,
-                    "duplicate @location(%lld) on entry-point %s",
-                    l, is_input ? "input" : "output");
+                    "@location value must be a non-negative integer "
+                    "(got %lld)", l);
             } else {
-                *bs |= (1ull << l);
+                LocSet *ls = is_input ? &io->in_locations : &io->out_locations;
+                int add = locset_add(ls, l);
+                if (add == 0) {
+                    wgsl_val_error(v, loc,
+                        "duplicate @location(%lld) on entry-point %s",
+                        l, is_input ? "input" : "output");
+                } else if (add < 0) {
+                    wgsl_val_error(v, loc,
+                        "@location uniqueness analysis truncated "
+                        "(out of memory)");
+                }
             }
         }
         /* §13.3.1.2 — @location-tagged IO must be numeric scalar /
@@ -247,34 +319,23 @@ static void check_io_slot(
     if (blt && blt->child_count >= 2) {
         WGSLNode *arg = blt->children[1];
         if (arg && arg->kind == WGSL_NODE_EXPR_IDENT) {
-            uint32_t off = (uint32_t)(arg->payload[0] & 0xFFFFFFFFu);
-            uint32_t len = (uint32_t)(arg->payload[0] >> 32);
+            uint32_t off = wgsl_node_name_span(arg).offset;
+            uint32_t len = wgsl_node_name_span(arg).length;
             const char *nm = v->src->bytes + off;
             /* Duplicate check (per entry point and direction).  Builtins
              * like sample_mask may legally appear once as input and once
              * as output on the same fragment entry point. */
-            SeenBuiltin *seen = is_input
-                ? io->seen_in_builtins : io->seen_out_builtins;
-            int *seen_n = is_input ? &io->seen_in_n : &io->seen_out_n;
-            int dup = 0;
-            for (int s = 0; s < *seen_n; s++) {
-                if (seen[s].len == len &&
-                    memcmp(seen[s].name, nm, len) == 0)
-                {
-                    dup = 1; break;
-                }
-            }
-            if (dup) {
+            BuiltinSet *bs = is_input
+                ? &io->seen_in_builtins : &io->seen_out_builtins;
+            int add = builtinset_add(bs, nm, len);
+            if (add == 0) {
                 wgsl_val_error(v, blt,
                     "@builtin(%.*s) must not be specified more than "
                     "once on a single entry point", (int)len, nm);
-            } else if (*seen_n <
-                       (int)(sizeof io->seen_in_builtins /
-                             sizeof io->seen_in_builtins[0]))
-            {
-                seen[*seen_n].name = nm;
-                seen[*seen_n].len  = len;
-                *seen_n += 1;
+            } else if (add < 0) {
+                wgsl_val_error(v, blt,
+                    "@builtin uniqueness analysis truncated "
+                    "(out of memory)");
             }
             /* Stage / direction / type matrix from kBuiltinTable. */
             const BuiltinEntry *be = wgsl_val_find_builtin_entry(nm, len);
@@ -320,6 +381,28 @@ static void check_io_slot(
     }
 }
 
+static void reject_struct_direct_io_attrs(
+    WGSLValidator *v,
+    WGSLNode *parent,
+    uint32_t first,
+    uint32_t count,
+    const char *what)
+{
+    for (uint32_t i = 0; i < count && first + i < parent->child_count; i++) {
+        WGSLNode *a = parent->children[first + i];
+        if (!a || a->kind != WGSL_NODE_ATTRIBUTE) continue;
+        if (!attr_is_entry_point_io(v, a)) continue;
+        const char *nm = NULL;
+        uint32_t nl = 0;
+        attr_name_span(v, a, &nm, &nl);
+        wgsl_val_error(v, a,
+            "entry-point IO attribute '@%.*s' may not apply to a "
+            "struct-typed entry %s; place it on the struct member "
+            "instead",
+            (int)nl, nm ? nm : "", what);
+    }
+}
+
 static void validate_blend_src_struct_shape(WGSLValidator *v, const WGSLNode *sd) {
     if (!sd || sd->kind != WGSL_NODE_DECL_STRUCT) return;
     int blend_src_seen[2] = {0, 0};
@@ -331,7 +414,7 @@ static void validate_blend_src_struct_shape(WGSLValidator *v, const WGSLNode *sd
     for (uint32_t i = 0; i < sd->child_count; i++) {
         WGSLNode *m = sd->children[i];
         if (!m || m->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
-        uint32_t MA = (uint32_t)(m->payload[1] & 0xFFFFFFFFu);
+        uint32_t MA = wgsl_member_attr_count(m);
         WGSLNode *loc = wgsl_val_find_attr(v, m, 0, MA, "location");
         if (loc) location_count += 1;
 
@@ -393,7 +476,7 @@ static void check_io_type(
         for (uint32_t i = 0; i < sd->child_count; i++) {
             WGSLNode *m = sd->children[i];
             if (!m || m->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
-            uint32_t MA = (uint32_t)(m->payload[1] & 0xFFFFFFFFu);
+            uint32_t MA = wgsl_member_attr_count(m);
             /* Resolve member type for shape / numeric / nested checks. */
             const WGSLTypeInfo *mt = NULL;
             if (MA < m->child_count) {
@@ -414,27 +497,23 @@ static void check_io_type(
 
 static void validate_fn_io(WGSLValidator *v, WGSLNode *fn, uint32_t stage_mask) {
     IOState state = {0};
-    uint32_t FA = (uint32_t)(fn->payload[1] & 0xFFFFFFFFu);
-    uint32_t P  = (uint32_t)(fn->payload[1] >> 32);
-    uint32_t RA = (uint32_t)(fn->payload[2] & 0xFFFFFFFFu);
-    uint32_t HR = (uint32_t)(fn->payload[2] >> 32);
+    uint32_t FA = wgsl_fn_attr_count(fn);
+    uint32_t P  = wgsl_fn_param_count(fn);
+    uint32_t RA = wgsl_fn_ret_attr_count(fn);
+    uint32_t HR = wgsl_fn_has_return_type(fn);
     for (uint32_t k = 0; k < P; k++) {
         if (FA + k >= fn->child_count) break;
         WGSLNode *p = fn->children[FA + k];
         if (!p || p->kind != WGSL_NODE_DECL_PARAM) continue;
-        uint32_t PA = (uint32_t)(p->payload[1] & 0xFFFFFFFFu);
+        uint32_t PA = wgsl_param_attr_count(p);
         WGSLTypeInfo *pt = NULL;
         if (PA < p->child_count) pt = wgsl_typecheck_type_of(v->tc, p->children[PA]);
 
         /* §13.3.1.3 — `@location` may not apply to a struct-typed
-         * param (struct members own their own @locations). */
+         * param; the same direct-attribute rule applies to all entry
+         * IO attrs on struct-typed params (members own their IO attrs). */
         if (pt && pt->kind == WGSL_TYPE_STRUCT) {
-            WGSLNode *ploc = wgsl_val_find_attr(v, p, 0, PA, "location");
-            if (ploc) {
-                wgsl_val_error(v, ploc,
-                    "@location may not apply to a struct-typed entry "
-                    "parameter; place it on the member instead");
-            }
+            reject_struct_direct_io_attrs(v, p, 0, PA, "parameter");
             check_io_type(v, p, pt, &state, 1, stage_mask, 0);
             continue;
         }
@@ -452,6 +531,7 @@ static void validate_fn_io(WGSLValidator *v, WGSLNode *fn, uint32_t stage_mask) 
             rt = wgsl_typecheck_type_of(v->tc, ret_spec);
         }
         if (rt && rt->kind == WGSL_TYPE_STRUCT) {
+            reject_struct_direct_io_attrs(v, fn, FA + P, RA, "return type");
             check_io_type(v, ret_spec ? ret_spec : fn, rt, &state, 0, stage_mask, 0);
         } else {
             check_io_slot(v, ret_spec ? ret_spec : fn, fn, FA + P, RA, rt,
@@ -459,6 +539,7 @@ static void validate_fn_io(WGSLValidator *v, WGSLNode *fn, uint32_t stage_mask) 
             /* §13.3.1.2 — compute stage user-defined IO is checked per slot. */
         }
     }
+    iostate_free(&state);
 }
 
 static int name_has_prefix(const char *name, uint32_t len, const char *prefix) {
@@ -603,7 +684,7 @@ void validate_entry_points(WGSLValidator *v, WGSLNode *tu) {
         WGSLNode *fn = tu->children[i];
         if (!fn || fn->kind != WGSL_NODE_DECL_FUNCTION) continue;
 
-        uint32_t FA = (uint32_t)(fn->payload[1] & 0xFFFFFFFFu);
+        uint32_t FA = wgsl_fn_attr_count(fn);
         WGSLNode *vx = wgsl_val_find_attr(v, fn, 0, FA, "vertex");
         WGSLNode *fr = wgsl_val_find_attr(v, fn, 0, FA, "fragment");
         WGSLNode *co = wgsl_val_find_attr(v, fn, 0, FA, "compute");
@@ -630,12 +711,12 @@ void validate_entry_points(WGSLValidator *v, WGSLNode *tu) {
 
         /* §13.2 — a compute entry point must not have a return type. */
         if (co) {
-            uint32_t HR_co = (uint32_t)(fn->payload[2] >> 32);
+            uint32_t HR_co = wgsl_fn_has_return_type(fn);
             if (HR_co) {
                 /* Point the diagnostic at the return type spec if we
                  * can locate it. */
-                uint32_t P_co  = (uint32_t)(fn->payload[1] >> 32);
-                uint32_t RA_co = (uint32_t)(fn->payload[2] & 0xFFFFFFFFu);
+                uint32_t P_co  = wgsl_fn_param_count(fn);
+                uint32_t RA_co = wgsl_fn_ret_attr_count(fn);
                 WGSLNode *ret_spec = NULL;
                 if (FA + P_co + RA_co < fn->child_count) {
                     ret_spec = fn->children[FA + P_co + RA_co];
@@ -658,7 +739,7 @@ void validate_entry_points(WGSLValidator *v, WGSLNode *tu) {
                 if (!arg) continue;
                 size_t sc = v->diag->count;
                 int    se = v->diag->error_count;
-                int    cv = v->cev->had_error;
+                int    cv = v->cev->store.had_error;
                 WGSLValue val = {0};
                 int ok_eval = wgsl_consteval_expr(v->cev, arg, &val);
                 if (!ok_eval) {
@@ -669,7 +750,7 @@ void validate_entry_points(WGSLValidator *v, WGSLNode *tu) {
                      * `let` / fn-param refs are spec-illegal here. */
                     v->diag->count       = sc;
                     v->diag->error_count = se;
-                    v->cev->had_error    = cv;
+                    v->cev->store.had_error    = cv;
                     if (!wgsl_typecheck_is_override_expr(arg)) {
                         wgsl_val_error(v, arg,
                             "@workgroup_size argument must be a const- "
@@ -715,7 +796,7 @@ void validate_entry_points(WGSLValidator *v, WGSLNode *tu) {
          * type; applying it to a void fn is meaningless. */
         WGSLNode *mu = wgsl_val_find_attr(v, fn, 0, FA, "must_use");
         if (mu) {
-            uint32_t HR = (uint32_t)(fn->payload[2] >> 32);
+            uint32_t HR = wgsl_fn_has_return_type(fn);
             if (!HR) {
                 wgsl_val_error(v, mu,
                     "@must_use is only valid on a function with a return type");

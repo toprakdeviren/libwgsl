@@ -92,7 +92,7 @@ static void expect_reject(const char *src, const char *needle,
 }
 
 int main(void) {
-    /* ── §3 lead — encoding rules ──────────────────────────────── */
+    /* §3 lead - encoding rules. */
     {
         /* NUL code point inside source must be rejected per §3:
          * "The program text must not include a null code point". */
@@ -112,14 +112,14 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §3.1 — shader-generation error when translation_unit does    *
+    /* §3.1 - shader-generation error when translation_unit does.
      *           not match the entire token sequence                 */
     expect_reject("fn { }\n",      NULL,
                   "§3.1: translation_unit mismatch → error");
     expect_reject("@@ const X = 1;\n", NULL,
                   "§3.1: stray punctuation tokens at module scope → error");
 
-    /* ── §3.3 — comments ──────────────────────────────────────── */
+    /* §3.3 - comments. */
     expect_ok("const X = 1 /* mid */ + 2;\n",
               "§3.3: block comment between tokens parses");
     expect_ok("/* a /* b /* c */ b */ a */ const X = 1;\n",
@@ -131,7 +131,7 @@ int main(void) {
                   "unterminated",
                   "§3.3: unterminated block comment → shader-generation error");
 
-    /* ── §3.5.2 — leading-zero non-zero integer rejected ───────── */
+    /* §3.5.2 - leading-zero non-zero integer rejected. */
     expect_reject("const X = 012;\n",
                   "leading zero",
                   "§3.5.2: leading-zero non-zero decimal int rejected");
@@ -140,7 +140,7 @@ int main(void) {
     expect_ok("const A = 0;\nconst B = 0i;\nconst C = 0u;\n",
               "§3.5.2: plain `0`, `0i`, `0u` accepted");
 
-    /* ── §3.5.2 — `h` suffix gated on `enable f16;` ────────────── *
+    /* §3.5.2 - `h` suffix gated on `enable f16;`.
      *                                                             *
      * Per the spec table at the end of §3.5.2: an `h`-suffix       *
      * floating-point literal denotes f16 and "A floating point     *
@@ -163,7 +163,7 @@ int main(void) {
               "var<private> x : f16 = 1.0h;\n",
               "§6.2.4: `f16` type with `enable f16;` accepted");
 
-    /* ── §3.5.2 — i32 / u32 maximum literals pin ───────────────── *
+    /* §3.5.2 - i32 / u32 maximum literals pin.
      *                                                             *
      * The boundary literals themselves are accepted; overflow     *
      * detection (§6.2.1 / §6.2.3) is a documented gap in          *
@@ -171,13 +171,13 @@ int main(void) {
     expect_ok("const X : i32 = 2147483647i;\nconst Y : u32 = 4294967295u;\n",
               "§3.5.2: i32 max / u32 max literals accepted");
 
-    /* ── §3.6 — keywords are not user identifiers ──────────────── */
+    /* §3.6 - keywords are not user identifiers. */
     expect_reject("fn let() { }\n", NULL,
                   "§3.6: keyword `let` cannot be a function name");
     expect_reject("var fn : i32 = 0;\n", NULL,
                   "§3.6: keyword `fn` cannot be a variable name");
 
-    /* ── §3.7 — identifier rules ──────────────────────────────── */
+    /* §3.7 - identifier rules. */
     {
         /* Non-ASCII XID_Start / XID_Continue ident accepted. */
         expect_ok("const \xCE\x94 : i32 = 1;\n"   /* U+0394 Δ */
@@ -191,7 +191,7 @@ int main(void) {
                   "__",
                   "§3.7: identifier starting with `__` rejected");
 
-    /* ── §3.8 — context-dependent names are not keywords ───────── *
+    /* §3.8 - context-dependent names are not keywords.
      *                                                             *
      * Spec §3.8 calls these "context-dependent name tokens"       *
      * (attribute names, builtin value names, interpolation,       *
@@ -221,7 +221,7 @@ int main(void) {
               "const sample : i32 = 3;\n",
               "§3.8.7: interpolation sampling names usable as regular idents");
 
-    /* ── §3.9 — template list discovery edge cases ─────────────── */
+    /* §3.9 - template list discovery edge cases. */
     {
         /* Nested template: `array<vec4<f32>, 2>` — both `<…>` pairs *
          * resolved as template-arg delimiters.                      */
@@ -286,7 +286,7 @@ int main(void) {
             "§3.9: nested `array<array<u32,2>>=` closes two templates");
     }
 
-    /* ── §16.2 — reserved-word rejection ───────────────────────── *
+    /* §16.2 - reserved-word rejection.
      *                                                             *
      * A representative cross-section of the 146-entry spec list,  *
      * chosen to cover every length bucket from 2 to 16 so a       *
@@ -320,7 +320,7 @@ int main(void) {
         }
     }
 
-    /* ── §16.2 — names that LOOK reserved-ish but are NOT on the spec
+    /* §16.2 — names that LOOK reserved-ish but are NOT on the spec
      *           list MUST stay legal identifiers.  Catches over-strict
      *           regressions in the KW_TABLE (e.g., `block`, `void`,
      *           `fixed`, the `co*` cluster — all in older WGSL drafts

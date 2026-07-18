@@ -657,4 +657,83 @@
         done(&p);
     }
 
+    /* ── §4.3 bidirectional / contextual materialization ──────── *
+     *
+     * Expected type is threaded into literals, `~`, constructors, and
+     * conversion sites.  Abstract intermediate results stay abstract so
+     * use-site range checks still fire (`-1` → u32, `2^30 * 2` → i32).
+     */
+    {
+        /* Integer bit builtins: AbstractInt arg under u32 context. */
+        P p; run(&p, "fn f() { let x: u32 = countOneBits(7); }\n");
+        CHECK(p.ok, "countOneBits(7)->u32: tc_ok");
+        done(&p);
+    }
+    {
+        P p; run(&p, "const X: u32 = reverseBits(1);\n");
+        CHECK(p.ok, "const reverseBits(1)->u32: tc_ok");
+        done(&p);
+    }
+    {
+        /* `~0` under u32: materialize 0 as u32 before complement. */
+        P p; run(&p, "fn f() { let x: u32 = ~0; }\n");
+        CHECK(p.ok, "~0 under u32: tc_ok");
+        done(&p);
+    }
+    {
+        /* Contextual typegen constructor. */
+        P p; run(&p, "fn f() { let x: vec2u = vec2(1, 2); }\n");
+        CHECK(p.ok, "vec2(1,2) under vec2u: tc_ok");
+        done(&p);
+    }
+    {
+        P p; run(&p,
+            "fn g(v: vec2f) {}\n"
+            "fn f() { g(vec2(1, 2)); }\n");
+        CHECK(p.ok, "call arg vec2 under vec2f: tc_ok");
+        done(&p);
+    }
+    {
+        P p; run(&p, "fn f() -> u32 { return select(1, 2, true); }\n");
+        CHECK(p.ok, "return select abstract under u32: tc_ok");
+        done(&p);
+    }
+
+    /* ── §3.4 teachable overload diagnostics ──────────────────── */
+    {
+        /* step 1: conversion infeasible — list candidates + bad arg */
+        P p; run(&p, "fn f() { let x = sin(true); }\n");
+        CHECK(!p.ok, "teachable sin(bool): must error");
+        CHECK(has_error_with(&p.diag, "no matching overload for 'sin'"),
+              "teachable sin: header");
+        CHECK(has_error_with(&p.diag, "arguments: (bool)"),
+              "teachable sin: shows argument types");
+        CHECK(has_error_with(&p.diag, "step 1 (conversion)"),
+              "teachable sin: names elimination step");
+        CHECK(has_error_with(&p.diag, "no conversion from bool"),
+              "teachable sin: per-candidate reason");
+        done(&p);
+    }
+    {
+        /* mixed numeric family — step 1 rejects all parametric T */
+        P p; run(&p, "fn f(a: i32) { let x = min(a, 1.0); }\n");
+        CHECK(!p.ok, "teachable min(i32, f32): must error");
+        CHECK(has_error_with(&p.diag, "arguments: (i32, AbstractFloat)") ||
+              has_error_with(&p.diag, "arguments: (i32, f32)") ||
+              has_error_with(&p.diag, "step 1 (conversion)") ||
+              has_error_with(&p.diag, "no generated"),
+              "teachable min: explains args or step");
+        done(&p);
+    }
+    {
+        /* exact §17 rejection still errors (parametric must not accept) */
+        P p; run(&p, "fn f() { let r = sign(1u); }\n");
+        CHECK(!p.ok, "teachable sign(u32): still errors");
+        CHECK(has_error_with(&p.diag, "sign") ||
+              has_error_with(&p.diag, "no matching overload") ||
+              has_error_with(&p.diag, "does not accept"),
+              "teachable sign(u32): diagnostic present");
+        done(&p);
+    }
+
     /* ── §7 — declaration / decl-attr conformance round-up ────── */

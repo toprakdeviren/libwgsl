@@ -22,7 +22,7 @@
 #include "internal/types.h"
 #include "internal/ast.h"
 
-/* ── Behavior-set analysis (§9.7) ──────────────────────────────────── */
+/* Behavior-set analysis (§9.7). */
 
 typedef uint8_t Behavior;
 
@@ -172,7 +172,7 @@ static Behavior beh_stmt(WGSLValidator *v, WGSLNode *n) {
         return r;
     }
     case WGSL_NODE_STMT_FOR: {
-        uint32_t flags = (uint32_t)n->payload[0];
+        uint32_t flags = wgsl_for_flags(n);
         int has_cond = (flags & 2u) != 0;
         Behavior body = 0;
         for (uint32_t i = 0; i < n->child_count; i++) {
@@ -206,7 +206,7 @@ static Behavior beh_stmt(WGSLValidator *v, WGSLNode *n) {
         for (uint32_t i = 1; i < n->child_count; i++) {
             WGSLNode *c = n->children[i];
             if (!c || c->kind != WGSL_NODE_STMT_CASE_CLAUSE) continue;
-            int is_default_alone = (int)((c->payload[0] >> 32) & 1u);
+            int is_default_alone = wgsl_case_is_default_alone(c);
             if (is_default_alone) has_default = 1;
             result = (Behavior)(result | beh_stmt(v, c));
         }
@@ -259,7 +259,7 @@ void validate_behavior(WGSLValidator *v, WGSLNode *tu) {
         WGSLNode *fn = tu->children[i];
         if (!fn || fn->kind != WGSL_NODE_DECL_FUNCTION) continue;
 
-        uint32_t HR = (uint32_t)(fn->payload[2] >> 32);
+        uint32_t HR = wgsl_fn_has_return_type(fn);
         if (fn->child_count == 0) continue;
         WGSLNode *body = fn->children[fn->child_count - 1];
         if (!body || body->kind != WGSL_NODE_STMT_COMPOUND) continue;
@@ -279,8 +279,8 @@ void validate_behavior(WGSLValidator *v, WGSLNode *tu) {
         if (HR && (b & WGSL_BEHAVIOR_NEXT)) {
             const char *fname = "<anonymous>";
             uint32_t fname_len = 11;
-            uint32_t no = (uint32_t)(fn->payload[0] & 0xFFFFFFFFu);
-            uint32_t nl = (uint32_t)(fn->payload[0] >> 32);
+            uint32_t no = wgsl_node_name_span(fn).offset;
+            uint32_t nl = wgsl_node_name_span(fn).length;
             if (nl > 0) {
                 fname = v->src->bytes + no;
                 fname_len = nl;

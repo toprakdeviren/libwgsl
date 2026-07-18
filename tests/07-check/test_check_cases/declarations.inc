@@ -271,6 +271,29 @@
         done(&p);
     }
     {
+        char *src = build_large_struct_source(4096u, 0);
+        CHECK(src != NULL, "§7.13 struct hash: build unique source");
+        if (src) {
+            P p; run(&p, src);
+            CHECK(p.ok, "§7.13 struct hash: 4096 unique members");
+            done(&p);
+            free(src);
+        }
+    }
+    {
+        char *src = build_large_struct_source(4096u, 1);
+        CHECK(src != NULL, "§7.13 struct hash: build duplicate source");
+        if (src) {
+            P p; run(&p, src);
+            CHECK(!p.ok, "§7.13 struct hash: duplicate still errors");
+            CHECK(has_error_with(&p.diag,
+                "struct member name 'f0' must be unique within the struct"),
+                  "§7.13 struct hash: checker duplicate diag");
+            done(&p);
+            free(src);
+        }
+    }
+    {
         /* §17.8 — happy paths covering Load / Store / RMW / CX. */
         P p; run(&p,
             "@group(0) @binding(0) var<storage,read_write> a: atomic<i32>;\n"
@@ -390,4 +413,3 @@
         CHECK(p.ok, "@group/@binding on resources: tc_ok");
         done(&p);
     }
-

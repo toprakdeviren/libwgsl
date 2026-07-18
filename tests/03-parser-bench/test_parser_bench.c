@@ -1,15 +1,14 @@
 /**
- * Phase 3.5 — parser benchmark gate.
+ * Parser benchmark gate.
  *
- * The synthetic-1Kloc test slot in PLAN.md is filled by the real
- * 2 971 LOC ML/transformer corpus under examples/shaders/ — more honest
- * than a generated stress sample.  For each shader:
+ * Uses the real ML/transformer corpus under examples/shaders/ rather
+ * than a synthetic stress sample.  For each shader:
  *   1. slurp once (file I/O excluded from timing)
  *   2. run wgsl_tokenize + wgsl_parse + free, ITER times, fresh arena
  *   3. record the *minimum* wall time (best estimate of the
  *      JIT/branch-predictor-warm path)
  *
- * Gate: aggregate ms/Kloc must stay under 4.0 (PLAN.md risk register).
+ * Gate: aggregate ms/Kloc must stay under 4.0.
  * Goal:  ≤ 2 ms / Kloc on M-arm64-1 (Naga's order of magnitude).
  *
  * The first iteration is also reported separately as a "cold-ish" pass
@@ -100,6 +99,16 @@ static int compare_rows(const void *a, const void *b) {
 }
 
 int main(void) {
+    {
+        DIR *_d = opendir(SHADERS_DIR);
+        if (!_d) {
+            fprintf(stderr, "SKIP  %s: %s not present (corpus optional)\n",
+                    __FILE__, SHADERS_DIR);
+            return 0;
+        }
+        closedir(_d);
+    }
+
     wgsl_utf8_init();
 
     DIR *d = opendir(SHADERS_DIR);
@@ -198,11 +207,11 @@ int main(void) {
             "[ total ]", total_loc, total_tokens,
             total_min_ms, total_cold_ms, agg_ms_per_kloc);
 
-    /* Gate per docs/PLAN.md risk register. */
+    /* Parser throughput gate. */
     const double GATE_MS_PER_KLOC = 4.0;
     if (agg_ms_per_kloc > GATE_MS_PER_KLOC) {
         fprintf(stderr,
-                "FAIL  Phase 3.5 gate: %.3f ms/Kloc > %.1f (warm-min aggregate)\n",
+                "FAIL  parser throughput gate: %.3f ms/Kloc > %.1f (warm-min aggregate)\n",
                 agg_ms_per_kloc, GATE_MS_PER_KLOC);
         fail += 1;
     }

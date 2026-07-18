@@ -7,22 +7,11 @@
  * parser recovers at the next `;` or `}` to surface multiple errors
  * per pass.
  *
- * Round A scope (this iteration):
- *   - translation_unit  — collects function decls; directives are
- *                          accepted-and-skipped, struct/alias/const/
- *                          override/var owed to Round C.
- *   - function_decl     — `attribute* fn IDENT '(' params ')'
- *                          ('->' attribute* type)? compound_statement`
- *   - parameter         — `attribute* IDENT ':' type_specifier`
- *   - type_specifier    — template_elaborated_ident
- *   - statements        — compound, let, return, expression-statement
- *   - expressions       — Pratt subset:
- *                            literal · ident · paren · call · index
- *                            · member · unary · binary (+ - * / % == != etc.)
- *                            · template_elaborated_ident
- *
- * Round B will expand to the full §8.19 precedence table, more
- * statements (if/switch/loop/for/while), and other global decls.
+ * The parser covers the frontend grammar surface used by the checker:
+ * directives, top-level declarations, attributes, type specifiers,
+ * compound/control-flow statements, and Pratt-parsed expressions
+ * including calls, indexing, member access, unary/binary operators,
+ * and template-elaborated identifiers.
  *
  * Returned AST nodes are 48-byte WGSLNode objects.  Children layout is
  * kind-dependent and documented per-parser; see also `ast_dump.c`.

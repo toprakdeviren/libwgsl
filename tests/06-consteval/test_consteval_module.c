@@ -1,5 +1,5 @@
 /**
- * Phase 6 Iter B — module + fn-scope const declarations + const_assert.
+ * Module and function-scope const declarations plus const_assert.
  *
  * Covers:
  *   - module-scope `const NAME = expr;` evaluates and caches the value
@@ -12,7 +12,7 @@
  *   - `const_assert` referencing a non-const ident errors ("not a constant")
  *   - fn-scope `const X = …;` bound for use inside the same fn body
  *   - fn-scope const referencing a module const
- *   - `override` decl walked without exploding (Iter B no-op)
+ *   - `override` decl walked without emitting const-eval errors
  */
 #include "internal/consteval.h"
 #include "internal/check.h"
@@ -123,7 +123,7 @@ static const WGSLValue *fn_value_of(const P *p, const char *want) {
 int main(void) {
     wgsl_utf8_init();
 
-    /* ── Module-scope const: untyped ───────────────────────────── */
+    /* Module-scope const: untyped. */
     {
         P p; run(&p, "const N = 4;\n");
         CHECK(p.ok, "const N = 4: ce_ok");
@@ -135,7 +135,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Module-scope typed const ─────────────────────────────── */
+    /* Module-scope typed const. */
     {
         P p; run(&p, "const N: u32 = 256;\n");
         CHECK(p.ok, "typed const u32: ce_ok");
@@ -145,7 +145,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Typed const, abstract literal materialised to f32 ───── */
+    /* Typed const, abstract literal materialised to f32. */
     {
         P p; run(&p, "const PI: f32 = 314;\n");   /* 314 → 314.0f */
         CHECK(p.ok, "typed const f32: ce_ok");
@@ -156,7 +156,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Typed const range error ──────────────────────────────── */
+    /* Typed const range error. */
     {
         P p; run(&p, "const N: u32 = -1;\n");
         CHECK(!p.ok, "u32 = -1: must error");
@@ -165,7 +165,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Module const referenced by a later module const ─────── */
+    /* Module const referenced by a later module const. */
     {
         P p; run(&p,
             "const A = 4;\n"
@@ -176,7 +176,28 @@ int main(void) {
         done(&p);
     }
 
-    /* ── const_assert literal pass ────────────────────────────── */
+    /* Binding hash grows and serves WGSLSymbol* lookups. */
+    {
+        char src[4096];
+        size_t off = 0;
+        for (int i = 0; i < 80; i++) {
+            int n = snprintf(src + off, sizeof src - off,
+                             "const C%d = %d;\n", i, i);
+            CHECK(n > 0 && off + (size_t)n < sizeof src,
+                  "binding hash: source fits");
+            off += (size_t)n;
+        }
+        P p; run(&p, src);
+        CHECK(p.ok, "binding hash: many consts ok");
+        CHECK(p.cev.store.binding_htab != NULL && p.cev.store.binding_htab_cap >= 128,
+              "binding hash: table allocated and grown");
+        const WGSLValue *v = value_of(&p, "C79");
+        CHECK(v && v->kind == WGSL_VAL_INT && v->u.i == 79,
+              "binding hash: C79 lookup");
+        done(&p);
+    }
+
+    /* const_assert literal pass. */
     {
         P p; run(&p, "const_assert true;\n");
         CHECK(p.ok, "const_assert true: ce_ok");
@@ -188,7 +209,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── const_assert literal fail ────────────────────────────── */
+    /* const_assert literal fail. */
     {
         P p; run(&p, "const_assert 1 == 2;\n");
         CHECK(!p.ok, "const_assert 1==2: must error");
@@ -197,7 +218,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── const_assert referencing a module const ─────────────── */
+    /* const_assert referencing a module const. */
     {
         P p; run(&p,
             "const WG: u32 = 256u;\n"
@@ -206,7 +227,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── const_assert referencing a non-const (fn param) errors ─ */
+    /* const_assert referencing a non-const (fn param) errors. */
     {
         P p; run(&p,
             "fn f(x: i32) {\n"
@@ -218,7 +239,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── const_assert with non-bool condition errors ─────────── */
+    /* const_assert with non-bool condition errors. */
     {
         P p; run(&p, "const_assert 5;\n");
         CHECK(!p.ok, "const_assert 5: must error");
@@ -227,7 +248,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Fn-scope const + const_assert ────────────────────────── */
+    /* Fn-scope const + const_assert. */
     {
         P p; run(&p,
             "fn f() {\n"
@@ -241,7 +262,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Fn-scope const referencing a module const ───────────── */
+    /* Fn-scope const referencing a module const. */
     {
         P p; run(&p,
             "const N: u32 = 4u;\n"
@@ -253,7 +274,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Override decl: walked without erroring (Iter B no-op) ─ */
+    /* Override decl: walked without emitting const-eval errors. */
     {
         P p; run(&p,
             "override SCALE: f32 = 1.0;\n"
@@ -265,8 +286,8 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Module const without init must already have failed at parse;
-     *    verify the const-evaluator gracefully handles it. ─── */
+    /* Module const without init must already have failed at parse;
+     *    verify the const-evaluator gracefully handles it. */
     {
         P p; run(&p, "const N;\n");
         /* The parser will already have emitted a diag.  We just check
@@ -275,7 +296,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── §15.7.7 FP builtin domains in const-eval ───────────── */
+    /* §15.7.7 FP builtin domains in const-eval. */
     {
         P p; run(&p, "const R = sqrt(4.0);\n");
         CHECK(p.ok, "sqrt(4.0): const-eval ok");
@@ -428,7 +449,7 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Aggregate constructors + access fold-through ─────────── */
+    /* Aggregate constructors + access fold-through. */
     {
         P p; run(&p,
             "const V = vec2(0xffffffffff, 0xfffffffff0);\n"
@@ -482,12 +503,93 @@ int main(void) {
         done(&p);
     }
 
-    /* ── Mixing types in a typed const ────────────────────────── */
+    /* Mixing types in a typed const. */
     {
         P p; run(&p, "const N: i32 = 1u + 1u;\n");
         /* Unsigned + unsigned can't materialise to i32 (no implicit
          * concrete-to-concrete conversion). */
         CHECK(!p.ok, "i32 = u32 expr: must error");
+        done(&p);
+    }
+
+    /* §11.3 pure user-function const-eval (memoized). */
+    {
+        P p; run(&p,
+            "fn double(x: i32) -> i32 { return x * 2; }\n"
+            "const N = double(21);\n");
+        CHECK(p.ok, "§11.3 pure fn call: ok");
+        const WGSLValue *v = value_of(&p, "N");
+        CHECK(v && v->kind == WGSL_VAL_INT && v->u.i == 42, "N == 42");
+        done(&p);
+    }
+    {
+        P p; run(&p,
+            "fn double(x: i32) -> i32 { return x * 2; }\n"
+            "fn diamond(x: i32) -> i32 {\n"
+            "  let y = double(x);\n"
+            "  return y + y;\n"
+            "}\n"
+            "const A = diamond(3);\n"
+            "const B = double(21);\n"
+            "const C = double(21);\n");   /* second double → memo hit */
+        CHECK(p.ok, "§11.3 nested pure + memo: ok");
+        const WGSLValue *a = value_of(&p, "A");
+        const WGSLValue *b = value_of(&p, "B");
+        const WGSLValue *c = value_of(&p, "C");
+        CHECK(a && a->u.i == 12, "diamond(3) == 12");
+        CHECK(b && b->u.i == 42 && c && c->u.i == 42, "double memo == 42");
+        done(&p);
+    }
+    {
+        char src[4096];
+        size_t off = 0;
+        int n = snprintf(src + off, sizeof src - off,
+                         "fn bump(x: i32) -> i32 { return x + 1; }\n");
+        CHECK(n > 0 && off + (size_t)n < sizeof src,
+              "user-fn memo hash: header fits");
+        off += (size_t)n;
+        for (int i = 0; i < 96; i++) {
+            n = snprintf(src + off, sizeof src - off,
+                         "const U%d = bump(%d);\n", i, i);
+            CHECK(n > 0 && off + (size_t)n < sizeof src,
+                  "user-fn memo hash: source fits");
+            off += (size_t)n;
+        }
+        n = snprintf(src + off, sizeof src - off,
+                     "const H0 = bump(80);\n"
+                     "const H1 = bump(80);\n");
+        CHECK(n > 0 && off + (size_t)n < sizeof src,
+              "user-fn memo hash: duplicate source fits");
+        P p; run(&p, src);
+        CHECK(p.ok, "user-fn memo hash: many calls ok");
+        CHECK(p.cev.store.fn_memo_htab != NULL && p.cev.store.fn_memo_htab_cap >= 256,
+              "user-fn memo hash: table allocated and grown");
+        CHECK(p.cev.store.fn_memo_count == 96,
+              "user-fn memo hash: duplicate calls hit cache");
+        const WGSLValue *v = value_of(&p, "H1");
+        CHECK(v && v->kind == WGSL_VAL_INT && v->u.i == 81,
+              "user-fn memo hash: duplicate result");
+        done(&p);
+    }
+    {
+        P p; run(&p,
+            "fn abs_i(x: i32) -> i32 {\n"
+            "  if (x < 0) { return -x; } else { return x; }\n"
+            "}\n"
+            "const P = abs_i(-7);\n");
+        CHECK(p.ok, "§11.3 pure if/else: ok");
+        const WGSLValue *v = value_of(&p, "P");
+        CHECK(v && v->u.i == 7, "abs_i(-7) == 7");
+        done(&p);
+    }
+    {
+        P p; run(&p,
+            "fn bad(x: i32) -> i32 { var y = x; return y; }\n"
+            "const Z = bad(1);\n");
+        CHECK(!p.ok, "§11.3 impure (var) rejected");
+        CHECK(has_error_with(&p.diag, "not a const-expression") ||
+              has_error_with(&p.diag, "pure"),
+              "§11.3 impure: pure-body diagnostic");
         done(&p);
     }
 

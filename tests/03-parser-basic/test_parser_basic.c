@@ -1,5 +1,5 @@
 /**
- * Phase 3 Round A — basic parser smoke tests.
+ * Basic parser smoke tests.
  *
  * Asserts:
  *   - empty source yields a TU with 0 children
@@ -61,8 +61,8 @@ static int span_eq(const WGSLNode *n, const WGSLSource *src, const char *want) {
 
 /* Read the name span out of a node whose payload[0] holds it. */
 static int name_eq(const WGSLNode *n, const WGSLSource *src, const char *want) {
-    uint32_t off = (uint32_t)(n->payload[0] & 0xFFFFFFFFu);
-    uint32_t len = (uint32_t)(n->payload[0] >> 32);
+    uint32_t off = wgsl_node_name_span(n).offset;
+    uint32_t len = wgsl_node_name_span(n).length;
     size_t wlen = strlen(want);
     if (len != wlen) return 0;
     return memcmp(src->bytes + off, want, wlen) == 0;
@@ -105,9 +105,9 @@ int main(void) {
         const WGSLNode *fn = p.ast.root->children[0];
         CHECK(fn && fn->kind == WGSL_NODE_DECL_FUNCTION, "minimal: fn kind");
         CHECK(name_eq(fn, &p.src, "main"), "minimal: name = main");
-        uint32_t params = (uint32_t)(fn->payload[1] >> 32);
+        uint32_t params = wgsl_fn_param_count(fn);
         CHECK(params == 0, "minimal: 0 params");
-        uint32_t has_ret = (uint32_t)(fn->payload[2] >> 32);
+        uint32_t has_ret = wgsl_fn_has_return_type(fn);
         CHECK(has_ret == 0, "minimal: no return type");
         /* body is the last child */
         const WGSLNode *body = fn->children[fn->child_count - 1];
@@ -122,9 +122,9 @@ int main(void) {
         CHECK(p.lex_ok && p.parse_ok, "f: ok");
         const WGSLNode *fn = p.ast.root->children[0];
         CHECK(name_eq(fn, &p.src, "f"), "f: name");
-        uint32_t fn_attrs = (uint32_t)(fn->payload[1] & 0xFFFFFFFFu);
-        uint32_t params   = (uint32_t)(fn->payload[1] >> 32);
-        uint32_t has_ret  = (uint32_t)(fn->payload[2] >> 32);
+        uint32_t fn_attrs = wgsl_fn_attr_count(fn);
+        uint32_t params   = wgsl_fn_param_count(fn);
+        uint32_t has_ret  = wgsl_fn_has_return_type(fn);
         CHECK(fn_attrs == 0 && params == 1 && has_ret == 1, "f: counts");
         /* children: [param, ret_type, body] */
         const WGSLNode *param = fn->children[0];
@@ -157,12 +157,12 @@ int main(void) {
         const WGSLNode *expr = let->children[let->child_count - 1];
         CHECK(expr && expr->kind == WGSL_NODE_EXPR_BINARY, "prec: binary root");
         /* root op = '+', children = [1, 2*3] */
-        WGSLTokenKind op = (WGSLTokenKind)expr->payload[0];
+        WGSLTokenKind op = (WGSLTokenKind)wgsl_node_op_kind_u32(expr);
         CHECK(op == WGSL_TOK_PLUS, "prec: root op = +");
         CHECK(expr->children[0]->kind == WGSL_NODE_EXPR_LITERAL_INT, "prec: lhs is 1");
         const WGSLNode *rhs = expr->children[1];
         CHECK(rhs->kind == WGSL_NODE_EXPR_BINARY, "prec: rhs is binary");
-        WGSLTokenKind rhs_op = (WGSLTokenKind)rhs->payload[0];
+        WGSLTokenKind rhs_op = (WGSLTokenKind)wgsl_node_op_kind_u32(rhs);
         CHECK(rhs_op == WGSL_TOK_STAR, "prec: rhs op = *");
         done(&p);
     }
@@ -196,10 +196,10 @@ int main(void) {
             "-> @location(0) vec2f { return vec2f(0.0, 1.0); }");
         CHECK(p.lex_ok && p.parse_ok, "attrs: ok");
         const WGSLNode *fn = p.ast.root->children[0];
-        uint32_t fn_attrs = (uint32_t)(fn->payload[1] & 0xFFFFFFFFu);
-        uint32_t params   = (uint32_t)(fn->payload[1] >> 32);
-        uint32_t ret_attrs= (uint32_t)(fn->payload[2] & 0xFFFFFFFFu);
-        uint32_t has_ret  = (uint32_t)(fn->payload[2] >> 32);
+        uint32_t fn_attrs = wgsl_fn_attr_count(fn);
+        uint32_t params   = wgsl_fn_param_count(fn);
+        uint32_t ret_attrs= wgsl_fn_ret_attr_count(fn);
+        uint32_t has_ret  = wgsl_fn_has_return_type(fn);
         CHECK(fn_attrs == 1, "attrs: 1 fn-attr (@vertex)");
         CHECK(params   == 1, "attrs: 1 param");
         CHECK(ret_attrs== 1, "attrs: 1 ret-attr (@location)");
@@ -212,7 +212,7 @@ int main(void) {
 
         const WGSLNode *param = fn->children[1];
         CHECK(param->kind == WGSL_NODE_DECL_PARAM, "attrs: param kind");
-        uint32_t param_attr_count = (uint32_t)param->payload[1];
+        uint32_t param_attr_count = wgsl_param_attr_count(param);
         CHECK(param_attr_count == 1, "attrs: param has 1 attr");
         /* param children: [@builtin, type] */
         const WGSLNode *param_attr = param->children[0];
@@ -261,7 +261,7 @@ int main(void) {
         const WGSLNode *let = body->children[0];
         const WGSLNode *expr = let->children[let->child_count - 1];
         CHECK(expr->kind == WGSL_NODE_EXPR_UNARY, "unary: kind");
-        WGSLTokenKind op = (WGSLTokenKind)expr->payload[0];
+        WGSLTokenKind op = (WGSLTokenKind)wgsl_node_op_kind_u32(expr);
         CHECK(op == WGSL_TOK_MINUS, "unary: op = -");
         CHECK(expr->children[0]->kind == WGSL_NODE_EXPR_LITERAL_INT, "unary: operand = int");
         (void)span_eq;  /* unused helper retained for richer assertions later */

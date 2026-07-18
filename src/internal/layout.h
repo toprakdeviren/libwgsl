@@ -29,6 +29,7 @@ typedef struct {
     WGSLTypeChecker    *tc;     /* member type lookup via wgsl_typecheck_type_of */
     WGSLConstEvaluator *cev;    /* @align(N) / @size(N) const-eval */
     const WGSLSource   *src;    /* attribute name match needs source bytes */
+    int                 depth;  /* struct-nesting recursion depth; 0 at entry */
 } WGSLLayoutCtx;
 
 /* AlignOf(T) — basic alignment, ignoring address-space adjustments.

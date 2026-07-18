@@ -1,5 +1,5 @@
 /**
- * Phase 2 Round A — basic lexer.
+ * Basic lexer tests.
  *
  * Covers:
  *   - empty input

@@ -1,0 +1,10 @@
+{
+  "entry": "main",
+  "len": 2,
+  "ok": true,
+  "known_numeric_difference": true,
+  "abs_tol": 0.001,
+  "buffers": [
+    { "name": "o", "values": ["0.3", "0.333333"] }
+  ]
+}

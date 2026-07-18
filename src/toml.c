@@ -47,11 +47,11 @@ typedef struct WGSLTomlEntry {
 struct WGSLToml {
     WGSLTomlEntry *head;
     /* Bookkeeping for cleanup: a separate "all string slabs" list
-     * could be added later if we need to dedupe; for now each entry
+     * could be added later if we need to dedupe; currently each entry
      * owns its strings outright. */
 };
 
-/* ── Parser state ─────────────────────────────────────────────────── */
+/* Parser state. */
 
 typedef struct {
     const char *src;
@@ -298,7 +298,7 @@ static WGSLToml *p_parse(P *p) {
 
         if (p_peek(p) == '[') {
             p_advance(p);
-            /* Disallow `[[…]]` array-of-tables for now. */
+            /* Disallow `[[…]]` array-of-tables in this small parser. */
             if (p_peek(p) == '[') {
                 p_error(p, "array-of-tables `[[…]]` not supported");
                 goto fail;
@@ -405,7 +405,7 @@ fail:
     return NULL;
 }
 
-/* ── Public API ───────────────────────────────────────────────────── */
+/* Public API. */
 
 WGSLToml *wgsl_toml_parse(const char *src, size_t len, char *err, size_t err_len) {
     if (err && err_len > 0) err[0] = '\0';

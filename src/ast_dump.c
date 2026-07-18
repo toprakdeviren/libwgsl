@@ -91,18 +91,26 @@ static void dump_node(const WGSLNode *n, const WGSLSource *src, FILE *out, int l
         fputs("(null)\n", out);
         return;
     }
+    /* `level` is exactly the recursion depth; cap it so a pathologically
+     * deep AST (e.g. a long `a+a+…` chain) can't overflow the stack while
+     * dumping.  No diag bag here — print a truncation marker and unwind. */
+    if (level >= WGSL_MAX_AST_DEPTH) {
+        indent(out, level);
+        fputs("(… max AST depth reached …)\n", out);
+        return;
+    }
     indent(out, level);
     fprintf(out, "(%s", node_kind_short((WGSLNodeKind)n->kind));
 
     /* Per-kind details */
     switch ((WGSLNodeKind)n->kind) {
     case WGSL_NODE_DECL_FUNCTION: {
-        uint32_t name_off = (uint32_t)(n->payload[0] & 0xFFFFFFFFu);
-        uint32_t name_len = (uint32_t)(n->payload[0] >> 32);
-        uint32_t fn_attrs = (uint32_t)(n->payload[1] & 0xFFFFFFFFu);
-        uint32_t params   = (uint32_t)(n->payload[1] >> 32);
-        uint32_t ret_attrs= (uint32_t)(n->payload[2] & 0xFFFFFFFFu);
-        uint32_t has_ret  = (uint32_t)(n->payload[2] >> 32);
+        uint32_t name_off = wgsl_node_name_span(n).offset;
+        uint32_t name_len = wgsl_node_name_span(n).length;
+        uint32_t fn_attrs = wgsl_fn_attr_count(n);
+        uint32_t params   = wgsl_fn_param_count(n);
+        uint32_t ret_attrs= wgsl_fn_ret_attr_count(n);
+        uint32_t has_ret  = wgsl_fn_has_return_type(n);
         fputs(" name=", out);
         print_name(out, src, name_off, name_len);
         fprintf(out, " fn_attrs=%u params=%u ret_attrs=%u ret_type=%s",
@@ -112,8 +120,8 @@ static void dump_node(const WGSLNode *n, const WGSLSource *src, FILE *out, int l
     case WGSL_NODE_DECL_PARAM:
     case WGSL_NODE_DECL_LET:
     case WGSL_NODE_EXPR_IDENT: {
-        uint32_t name_off = (uint32_t)(n->payload[0] & 0xFFFFFFFFu);
-        uint32_t name_len = (uint32_t)(n->payload[0] >> 32);
+        uint32_t name_off = wgsl_node_name_span(n).offset;
+        uint32_t name_len = wgsl_node_name_span(n).length;
         if (name_len > 0) {
             fputs(" ", out);
             print_name(out, src, name_off, name_len);
@@ -131,8 +139,8 @@ static void dump_node(const WGSLNode *n, const WGSLSource *src, FILE *out, int l
     }
     case WGSL_NODE_EXPR_BINARY:
     case WGSL_NODE_EXPR_UNARY: {
-        uint32_t op_off = (uint32_t)(n->payload[1] & 0xFFFFFFFFu);
-        uint32_t op_len = (uint32_t)(n->payload[1] >> 32);
+        uint32_t op_off = wgsl_node_op_span(n).offset;
+        uint32_t op_len = wgsl_node_op_span(n).length;
         if (src && op_len > 0) {
             fputs(" op=", out);
             print_name(out, src, op_off, op_len);

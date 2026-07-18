@@ -1,5 +1,5 @@
 /**
- * Phase 3 Round B Iter 1 — control flow.
+ * Control-flow parser tests.
  *
  * Covers:
  *   - if + else if + else
@@ -106,7 +106,7 @@ int main(void) {
         CHECK(p.ok, "for-full: ok");
         const WGSLNode *s = first_body_stmt(&p.ast);
         CHECK(s->kind == WGSL_NODE_STMT_FOR, "for-full: kind");
-        uint32_t flags = (uint32_t)s->payload[0];
+        uint32_t flags = wgsl_for_flags(s);
         CHECK(flags == 0x7, "for-full: bitmap = 0b111");
         CHECK(s->child_count == 4, "for-full: 4 children (init, cond, update, body)");
         CHECK(s->children[0]->kind == WGSL_NODE_DECL_VAR,         "for-full: init = var");
@@ -120,7 +120,7 @@ int main(void) {
         P p; run(&p, "fn t() { for (;;) { } }");
         CHECK(p.ok, "for-empty: ok");
         const WGSLNode *s = first_body_stmt(&p.ast);
-        uint32_t flags = (uint32_t)s->payload[0];
+        uint32_t flags = wgsl_for_flags(s);
         CHECK(flags == 0, "for-empty: bitmap = 0");
         CHECK(s->child_count == 1, "for-empty: 1 child (body)");
         done(&p);
@@ -130,7 +130,7 @@ int main(void) {
         P p; run(&p, "fn t() { for (; x < 10;) { } }");
         CHECK(p.ok, "for-cond: ok");
         const WGSLNode *s = first_body_stmt(&p.ast);
-        uint32_t flags = (uint32_t)s->payload[0];
+        uint32_t flags = wgsl_for_flags(s);
         CHECK(flags == 0x2, "for-cond: bitmap = 0b010");
         CHECK(s->child_count == 2, "for-cond: 2 children (cond, body)");
         CHECK(s->children[0]->kind == WGSL_NODE_EXPR_BINARY, "for-cond: cond first");
@@ -190,14 +190,14 @@ int main(void) {
         CHECK(clauses == 3, "switch: 3 case_clauses (incl. default)");
 
         const WGSLNode *c0 = s->children[1];
-        uint32_t c0_count = (uint32_t)(c0->payload[0] & 0xFFFFFFFFu);
-        uint32_t c0_default = (uint32_t)(c0->payload[0] >> 32);
+        uint32_t c0_count = wgsl_case_selector_count(c0);
+        uint32_t c0_default = wgsl_case_is_default(c0);
         CHECK(c0_count == 2 && c0_default == 0,
               "switch: clause 0 has 2 selectors, not default");
 
         const WGSLNode *c2 = s->children[3];
-        uint32_t c2_count   = (uint32_t)(c2->payload[0] & 0xFFFFFFFFu);
-        uint32_t c2_default = (uint32_t)(c2->payload[0] >> 32);
+        uint32_t c2_count   = wgsl_case_selector_count(c2);
+        uint32_t c2_default = wgsl_case_is_default(c2);
         CHECK(c2_count == 0 && c2_default == 1,
               "switch: clause 2 is default-alone");
 

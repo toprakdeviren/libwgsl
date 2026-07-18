@@ -300,6 +300,49 @@
               "@location compute struct diag");
         done(&p);
     }
+    /* Strict entry IO: direct IO attrs are invalid on struct-typed
+     * entry parameters; the attrs belong on members. */
+    {
+        P p; run(&p,
+            "struct In { @location(0) x: vec4<f32> }\n"
+            "@fragment\n"
+            "fn fs(@builtin(position) in: In) -> @location(0) vec4<f32> {\n"
+            "  return in.x;\n"
+            "}\n");
+        CHECK(!p.ok, "struct param direct @builtin: must error");
+        CHECK(has_error_with(&p.diag,
+            "may not apply to a struct-typed entry parameter"),
+              "struct param direct IO attr diag");
+        done(&p);
+    }
+    /* Strict entry IO: return attrs cannot decorate a struct-typed
+     * entry return; member attrs describe the output slots. */
+    {
+        P p; run(&p,
+            "struct Out { @location(1) x: vec4<f32> }\n"
+            "@fragment\n"
+            "fn fs() -> @location(0) Out {\n"
+            "  return Out(vec4<f32>(0.0));\n"
+            "}\n");
+        CHECK(!p.ok, "struct return direct @location: must error");
+        CHECK(has_error_with(&p.diag,
+            "may not apply to a struct-typed entry return type"),
+              "struct return direct IO attr diag");
+        done(&p);
+    }
+    {
+        P p; run(&p,
+            "struct Out { @location(0) x: vec4<f32> }\n"
+            "@vertex\n"
+            "fn vs() -> @builtin(position) Out {\n"
+            "  return Out(vec4<f32>(0.0));\n"
+            "}\n");
+        CHECK(!p.ok, "struct return direct @builtin: must error");
+        CHECK(has_error_with(&p.diag,
+            "may not apply to a struct-typed entry return type"),
+              "struct return direct builtin diag");
+        done(&p);
+    }
     /* §13.3.1.3 — type mismatch between sides must reject. */
     {
         P p; run(&p,
@@ -316,4 +359,3 @@
               "dual-source type-mismatch diag");
         done(&p);
     }
-

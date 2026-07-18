@@ -1,5 +1,5 @@
 /**
- * @file types.c — Phase 7 type-specifier resolution.
+ * @file types.c — type-specifier resolution.
  *
  * Resolves an AST type-spec subtree (EXPR_IDENT / EXPR_TEMPLATED_IDENT)
  * down to a `WGSLTypeInfo *` using the type interner.  Handles all
@@ -39,8 +39,8 @@ static void ident_name(
     const char **name, uint32_t *name_len)
 {
     if (!tc || !tc->src || !ident || !name || !name_len) return;
-    uint32_t off = (uint32_t)(ident->payload[0] & 0xFFFFFFFFu);
-    uint32_t len = (uint32_t)(ident->payload[0] >> 32);
+    uint32_t off = wgsl_node_name_span(ident).offset;
+    uint32_t len = wgsl_node_name_span(ident).length;
     if (off > tc->src->length) return;
     *name = tc->src->bytes + off;
     *name_len = len;
@@ -136,14 +136,18 @@ static int type_has_override_array(const WGSLTypeInfo *t) {
     return 0;
 }
 
-static int type_contains_runtime_array_deep(
-    const WGSLTypeChecker *tc, const WGSLTypeInfo *t)
+/* Depth-bounded on the resolved type graph: a deep struct/alias chain
+ * (`struct S1{a:S0}…`) is neither AST-deep nor template-bounded and would
+ * otherwise overflow the stack.  See src/internal/ast.h WGSL_MAX_AST_DEPTH. */
+static int type_contains_runtime_array_deep_impl(
+    const WGSLTypeChecker *tc, const WGSLTypeInfo *t, int depth)
 {
     if (!t) return 0;
+    if (depth > WGSL_MAX_AST_DEPTH) return 0;
     if (t->kind == WGSL_TYPE_ARRAY) {
         if (t->array_len == 0 && t->flags == 0 && t->pad_ == 0) return 1;
-        return type_contains_runtime_array_deep(
-            tc, (const WGSLTypeInfo *)t->ref);
+        return type_contains_runtime_array_deep_impl(
+            tc, (const WGSLTypeInfo *)t->ref, depth + 1);
     }
     if (t->kind == WGSL_TYPE_STRUCT) {
         const WGSLNode *sd = (const WGSLNode *)t->ref;
@@ -151,11 +155,43 @@ static int type_contains_runtime_array_deep(
         for (uint32_t i = 0; i < sd->child_count; i++) {
             const WGSLNode *m = sd->children[i];
             if (!m || m->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
-            uint32_t attrs = (uint32_t)(m->payload[1] & 0xFFFFFFFFu);
+            uint32_t attrs = wgsl_member_attr_count(m);
             if (attrs >= m->child_count) continue;
             const WGSLTypeInfo *mt =
                 wgsl_tc_store_type_of(tc, m->children[attrs]);
-            if (type_contains_runtime_array_deep(tc, mt)) return 1;
+            if (type_contains_runtime_array_deep_impl(tc, mt, depth + 1)) return 1;
+        }
+    }
+    return 0;
+}
+
+static int type_contains_runtime_array_deep(
+    const WGSLTypeChecker *tc, const WGSLTypeInfo *t)
+{
+    return type_contains_runtime_array_deep_impl(tc, t, 0);
+}
+
+static int type_contains_atomic_deep_impl(
+    const WGSLTypeChecker *tc, const WGSLTypeInfo *t, int depth)
+{
+    if (!t) return 0;
+    if (depth > WGSL_MAX_AST_DEPTH) return 0;
+    if (t->kind == WGSL_TYPE_ATOMIC) return 1;
+    if (t->kind == WGSL_TYPE_ARRAY) {
+        return type_contains_atomic_deep_impl(
+            tc, (const WGSLTypeInfo *)t->ref, depth + 1);
+    }
+    if (t->kind == WGSL_TYPE_STRUCT) {
+        const WGSLNode *sd = (const WGSLNode *)t->ref;
+        if (!sd) return 0;
+        for (uint32_t i = 0; i < sd->child_count; i++) {
+            const WGSLNode *m = sd->children[i];
+            if (!m || m->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
+            uint32_t attrs = wgsl_member_attr_count(m);
+            if (attrs >= m->child_count) continue;
+            const WGSLTypeInfo *mt =
+                wgsl_tc_store_type_of(tc, m->children[attrs]);
+            if (type_contains_atomic_deep_impl(tc, mt, depth + 1)) return 1;
         }
     }
     return 0;
@@ -164,25 +200,7 @@ static int type_contains_runtime_array_deep(
 static int type_contains_atomic_deep(
     const WGSLTypeChecker *tc, const WGSLTypeInfo *t)
 {
-    if (!t) return 0;
-    if (t->kind == WGSL_TYPE_ATOMIC) return 1;
-    if (t->kind == WGSL_TYPE_ARRAY) {
-        return type_contains_atomic_deep(tc, (const WGSLTypeInfo *)t->ref);
-    }
-    if (t->kind == WGSL_TYPE_STRUCT) {
-        const WGSLNode *sd = (const WGSLNode *)t->ref;
-        if (!sd) return 0;
-        for (uint32_t i = 0; i < sd->child_count; i++) {
-            const WGSLNode *m = sd->children[i];
-            if (!m || m->kind != WGSL_NODE_DECL_STRUCT_MEMBER) continue;
-            uint32_t attrs = (uint32_t)(m->payload[1] & 0xFFFFFFFFu);
-            if (attrs >= m->child_count) continue;
-            const WGSLTypeInfo *mt =
-                wgsl_tc_store_type_of(tc, m->children[attrs]);
-            if (type_contains_atomic_deep(tc, mt)) return 1;
-        }
-    }
-    return 0;
+    return type_contains_atomic_deep_impl(tc, t, 0);
 }
 
 static WGSLSymbol *resolve_predeclared_template_arg(
@@ -329,7 +347,7 @@ static WGSLTexelFormat resolve_texel_format_arg(
 }
 
 /* Same idea for the access-mode template arg.  read / write /
- * read_write resolve to PREDECLARED_ACCESS_MODE during Phase 5. */
+ * read_write resolve to PREDECLARED_ACCESS_MODE during name resolution. */
 WGSLAccessMode wgsl_tc_resolve_access_mode_arg(
     WGSLTypeChecker *tc, WGSLNode *arg)
 {
@@ -383,8 +401,8 @@ static WGSLTypeInfo *resolve_templated_type(
     if (!sym) return NULL;
 
     /* If the head is itself a fully-typed alias / scalar / scalar-alias,
-     * the template list is bogus — Phase 8 territory.  For Iter A we
-     * just return the head type. */
+     * the template list is invalid; keep the head type so later validation
+     * can report the source-level error with better context. */
     if (sym->kind == WGSL_SYM_PREDECLARED_TYPE ||
         sym->kind == WGSL_SYM_PREDECLARED_TYPE_ALIAS)
     {
@@ -683,8 +701,8 @@ static WGSLTypeInfo *resolve_templated_type(
         }
     }
 
-    /* Anything else (e.g. user types templated by mistake) — leave the
-     * silent NULL fall-through to Phase 8. */
+    /* Anything else (e.g. user types templated by mistake): leave the
+     * source-level diagnostic to the validation pass. */
     return NULL;
 }
 

@@ -1,5 +1,5 @@
 /**
- * Phase 1 sub-deliverable (b):  TSan smoke.
+ * TSan smoke test.
  *
  * The session model promises thread-safety via *isolation*: each
  * `WGSLArena` is owned by one thread; arenas are never shared.

@@ -13,9 +13,8 @@
  *   CR (U+000D) alone or as part of CR+LF,
  *   NEL (U+0085), LS (U+2028), PS (U+2029).
  *
- * Column is reported in **bytes from line start** in v1 (LSP's
- * default `positionEncodingKind` of "utf-16" can be added in v1.x —
- * tracked by `docs/PLAN.md`).
+ * Internal columns are byte offsets from line start.  Public LSP-facing
+ * APIs translate to the encoding documented by `include/wgsl.h`.
  */
 #ifndef WGSL_INTERNAL_SOURCE_H
 #define WGSL_INTERNAL_SOURCE_H
@@ -49,6 +48,15 @@ void wgsl_source_destroy(WGSLSource *s);
  * Line is 1-based.  Column is 1-based byte distance from line start.
  */
 int wgsl_source_offset_to_line_col(
+    const WGSLSource *s, uint32_t offset,
+    uint32_t *out_line, uint32_t *out_column);
+
+/**
+ * As above, but the column is in UTF-16 code units from the line start
+ * (LSP's default position encoding).  Use this for editor-facing
+ * positions so a non-ASCII prefix doesn't shift squiggles.
+ */
+int wgsl_source_offset_to_line_col_utf16(
     const WGSLSource *s, uint32_t offset,
     uint32_t *out_line, uint32_t *out_column);
 

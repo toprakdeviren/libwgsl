@@ -2,6 +2,7 @@
  * @file source.c — Line index for WGSL source buffers.  See source.h.
  */
 #include "internal/source.h"
+#include "internal/utf8.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -132,6 +133,40 @@ int wgsl_source_offset_to_line_col(
     }
     if (out_line)   *out_line   = lo + 1;                       /* 1-based */
     if (out_column) *out_column = (offset - s->line_starts[lo]) + 1;
+    return 1;
+}
+
+/* Like the above, but the column is measured in **UTF-16 code units** from
+ * the line start (LSP's default position encoding), so a non-ASCII prefix
+ * on the line doesn't shift editor squiggles.  ASCII lines are identical to
+ * the byte-column result. */
+int wgsl_source_offset_to_line_col_utf16(
+    const WGSLSource *s, uint32_t offset,
+    uint32_t *out_line, uint32_t *out_column)
+{
+    if (offset > s->length) return 0;
+
+    uint32_t lo = 0, hi = s->line_count;
+    while (lo + 1 < hi) {
+        uint32_t mid = lo + (hi - lo) / 2;
+        if (s->line_starts[mid] <= offset) lo = mid;
+        else                                hi = mid;
+    }
+    if (out_line) *out_line = lo + 1;                           /* 1-based */
+    if (out_column) {
+        uint32_t units = 0;
+        uint32_t pos = s->line_starts[lo];
+        while (pos < offset) {
+            WGSLUtf8Decode d = wgsl_utf8_step(
+                (const uint8_t *)s->bytes + pos, (size_t)(s->length - pos));
+            uint32_t step = d.consumed > 0 ? (uint32_t)d.consumed : 1u;
+            if (pos + step > offset) break;   /* offset mid-character */
+            /* Code points beyond the BMP encode as a surrogate pair. */
+            units += (d.consumed > 0 && d.code_point >= 0x10000u) ? 2u : 1u;
+            pos += step;
+        }
+        *out_column = units + 1;                                /* 1-based */
+    }
     return 1;
 }
 

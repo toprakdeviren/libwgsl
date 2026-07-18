@@ -1,15 +1,9 @@
 /**
- * @file wgsl.c — public C API implementation (Phase 9).
+ * @file wgsl.c — public C API implementation.
  *
- * Iter A — WGSLResult lifecycle: `wgsl_check` / `wgsl_check_n` /
- *          `wgsl_free`; verdict + diagnostic accessors;
- *          process-init glue; tokenizer-only `wgsl_lex`.
- * Iter B — `wgsl_semantic_tokens` overlays resolver bindings on raw
- *          identifier tokens; `wgsl_hover_at` returns the resolved
- *          type for the symbol under a byte offset;
- *          `wgsl_definition_at` returns the declaration name span.
- *
- * Iter C will produce the module-summary JSON.
+ * Owns the check pipeline, result lifecycle, diagnostics, language-service
+ * entry points, module JSON, optimization APIs, MSL emission, and interpreter
+ * wrappers exposed through include/wgsl.h.
  */
 #include "wgsl.h"
 
@@ -34,31 +28,9 @@
 #include "internal/utf8.h"
 #include "internal/validate.h"
 
-/* ── Result handle ────────────────────────────────────────────────── */
+/* Result handle (full layout in internal/result.h). */
+#include "internal/result.h"
 
-struct WGSLResult {
-    WGSLArena          arena;        /* parallel: AST + arena strings   */
-    char              *src_copy;     /* heap-owned source bytes         */
-    size_t             src_len;
-    WGSLSource         source;
-    WGSLDiagBag        diag;
-    WGSLLexResult      lex;
-    WGSLAst            ast;
-    WGSLTypeStore      types;
-    WGSLResolver       res;
-    WGSLConstEvaluator cev;
-    WGSLTypeChecker    tc;
-    WGSLValidator      val;
-
-    int                pipeline_ok;   /* lex && parse && diag-error-free */
-
-    /* Lazy cache for `wgsl_module_json`.  Built on first call;
-     * reused thereafter.  Empty string on failure.  Owned by the
-     * arena, so freed in `wgsl_free` along with everything else. */
-    char              *json_cache;
-    size_t             json_cache_len;
-    int                json_built;
-};
 
 static int add_size_checked(size_t a, size_t b, size_t *out) {
     if (a > SIZE_MAX - b) return 0;
@@ -80,15 +52,14 @@ static WGSLResult *make_error_result(const char *message) {
     return r;
 }
 
-/* ── Process lifecycle ────────────────────────────────────────────── */
+/* Process lifecycle. */
 
 void wgsl_init(void) {
     wgsl_utf8_init();
 }
 
 void wgsl_shutdown(void) {
-    /* Unicode tables are file-static and have no cleanup hook in v1.
-     * Implemented for symmetry. */
+    /* Unicode tables are file-static; the hook exists for API symmetry. */
 }
 
 const char *wgsl_spec_pin(void) {
@@ -99,13 +70,52 @@ const char *wgsl_unicode_version(void) {
     return "17.0.0";
 }
 
-/* ── Check ────────────────────────────────────────────────────────── */
+/* ABI layout (pointer-size-correct sizeof/offsetof table). */
 
-WGSLResult *wgsl_check(const char *src) {
-    return wgsl_check_n(src, src ? strlen(src) : 0);
+const WGSLAbiLayout *wgsl_abi_layout(void) {
+    static const WGSLAbiLayout L = {
+        .abi_version = WGSL_ABI_LAYOUT_VERSION,
+        .ptr_size    = (uint32_t)sizeof(void *),
+
+        .diagnostic_size       = (uint32_t)sizeof(WGSLDiagnostic),
+        .diagnostic_severity   = (uint32_t)offsetof(WGSLDiagnostic, severity),
+        .diagnostic_line       = (uint32_t)offsetof(WGSLDiagnostic, line),
+        .diagnostic_column     = (uint32_t)offsetof(WGSLDiagnostic, column),
+        .diagnostic_end_line   = (uint32_t)offsetof(WGSLDiagnostic, end_line),
+        .diagnostic_end_column = (uint32_t)offsetof(WGSLDiagnostic, end_column),
+        .diagnostic_message    = (uint32_t)offsetof(WGSLDiagnostic, message),
+        .diagnostic_rule       = (uint32_t)offsetof(WGSLDiagnostic, rule),
+
+        .lex_token_size   = (uint32_t)sizeof(WGSLLexToken),
+        .lex_token_kind   = (uint32_t)offsetof(WGSLLexToken, kind),
+        .lex_token_offset = (uint32_t)offsetof(WGSLLexToken, offset),
+        .lex_token_length = (uint32_t)offsetof(WGSLLexToken, length),
+        .lex_token_line   = (uint32_t)offsetof(WGSLLexToken, line),
+        .lex_token_column = (uint32_t)offsetof(WGSLLexToken, column),
+
+        .hover_size           = (uint32_t)sizeof(WGSLHover),
+        .hover_present        = (uint32_t)offsetof(WGSLHover, present),
+        .hover_type_repr      = (uint32_t)offsetof(WGSLHover, type_repr),
+        .hover_signature      = (uint32_t)offsetof(WGSLHover, signature),
+        .hover_doc            = (uint32_t)offsetof(WGSLHover, doc),
+        .hover_symbol_offset  = (uint32_t)offsetof(WGSLHover, symbol_offset),
+        .hover_symbol_length  = (uint32_t)offsetof(WGSLHover, symbol_length),
+
+        .definition_size    = (uint32_t)sizeof(WGSLDefinition),
+        .definition_present = (uint32_t)offsetof(WGSLDefinition, present),
+        .definition_offset  = (uint32_t)offsetof(WGSLDefinition, offset),
+        .definition_length  = (uint32_t)offsetof(WGSLDefinition, length),
+
+        .interp_step_cap          = WGSL_INTERP_STEP_CAP,
+        .interp_buffer_values_cap = WGSL_INTERP_BUFFER_VALUES_CAP,
+        .interp_max_lanes         = WGSL_INTERP_MAX_LANES,
+    };
+    return &L;
 }
 
-WGSLResult *wgsl_check_n(const char *src, size_t src_len) {
+/* Check (staged pipeline for session partial typecheck). */
+
+WGSLResult *wgsl_pipeline_begin(const char *src, size_t src_len) {
     wgsl_utf8_init();
 
     if (src_len > UINT32_MAX) {
@@ -138,7 +148,7 @@ WGSLResult *wgsl_check_n(const char *src, size_t src_len) {
         return make_error_result("out of memory while indexing WGSL source");
     }
 
-    int lex_ok    = wgsl_tokenize(&r->source, &r->arena, &r->diag, &r->lex);
+    int lex_ok = wgsl_tokenize(&r->source, &r->arena, &r->diag, &r->lex);
     if (!r->lex.tokens || r->lex.count == 0 ||
         r->lex.tokens[r->lex.count - 1].kind != WGSL_TOK_EOF)
     {
@@ -147,16 +157,18 @@ WGSLResult *wgsl_check_n(const char *src, size_t src_len) {
                               "lexer failed before producing EOF token");
         }
         r->pipeline_ok = 0;
+        (void)lex_ok;
         return r;
     }
 
-    int parse_ok  = wgsl_parse(&r->lex, &r->source, &r->arena, &r->diag, &r->ast);
+    int parse_ok = wgsl_parse(&r->lex, &r->source, &r->arena, &r->diag, &r->ast);
     if (!r->ast.root) {
         if (!wgsl_diag_has_error(&r->diag)) {
             wgsl_diag_emit_at(&r->diag, &r->source, WGSL_DIAG_ERROR, 0, 0, NULL,
                               "parser failed before producing an AST");
         }
         r->pipeline_ok = 0;
+        (void)parse_ok;
         return r;
     }
 
@@ -169,18 +181,47 @@ WGSLResult *wgsl_check_n(const char *src, size_t src_len) {
         return r;
     }
 
-    int res_ok = wgsl_resolve(
+    (void)wgsl_resolve(
         &r->ast, &r->source, &r->arena, &r->diag, &r->types, &r->res);
-    int ce_ok  = wgsl_consteval(
+    (void)wgsl_consteval(
         &r->ast, &r->source, &r->arena, &r->diag, &r->types, &r->res, &r->cev);
-    int tc_ok  = wgsl_typecheck(
-        &r->ast, &r->source, &r->arena, &r->diag, &r->types, &r->res, &r->cev, &r->tc);
-    int val_ok = wgsl_validate(
-        &r->ast, &r->source, &r->arena, &r->diag, &r->types, &r->res, &r->cev, &r->tc, &r->val);
+    /* pipeline_ok left 0 until finalize after typecheck+validate. */
+    return r;
+}
 
-    r->pipeline_ok =
-        lex_ok && parse_ok && res_ok && ce_ok && tc_ok && val_ok &&
-        !wgsl_diag_has_error(&r->diag);
+int wgsl_pipeline_typecheck(WGSLResult *r, const WGSLTypecheckOpts *opts) {
+    if (!r || !r->ast.root) return 0;
+    return wgsl_typecheck_with_opts(
+        &r->ast, &r->source, &r->arena, &r->diag, &r->types, &r->res, &r->cev,
+        &r->tc, opts);
+}
+
+int wgsl_pipeline_validate(WGSLResult *r) {
+    if (!r || !r->ast.root) return 0;
+    return wgsl_validate(
+        &r->ast, &r->source, &r->arena, &r->diag, &r->types, &r->res, &r->cev,
+        &r->tc, &r->val);
+}
+
+void wgsl_pipeline_finalize(WGSLResult *r, int early_ok) {
+    if (!r) return;
+    r->pipeline_ok = early_ok && !wgsl_diag_has_error(&r->diag) ? 1 : 0;
+}
+
+WGSLResult *wgsl_check(const char *src) {
+    return wgsl_check_n(src, src ? strlen(src) : 0);
+}
+
+WGSLResult *wgsl_check_n(const char *src, size_t src_len) {
+    WGSLResult *r = wgsl_pipeline_begin(src, src_len);
+    if (!r) return NULL;
+    if (!r->ast.root) {
+        /* begin already set pipeline_ok = 0 on early failure. */
+        return r;
+    }
+    int tc_ok  = wgsl_pipeline_typecheck(r, NULL);
+    int val_ok = wgsl_pipeline_validate(r);
+    wgsl_pipeline_finalize(r, tc_ok && val_ok);
     return r;
 }
 
@@ -235,7 +276,7 @@ void wgsl_free(WGSLResult *r) {
     free(r);
 }
 
-/* ── Verdict + module summary ─────────────────────────────────────── */
+/* Verdict + module summary. */
 
 int wgsl_ok(const WGSLResult *r) {
     return r ? (r->pipeline_ok != 0) : 0;
@@ -251,9 +292,14 @@ const char *wgsl_error(const WGSLResult *r) {
     return "";
 }
 
-/* ── Module summary JSON — Iter C ─────────────────────────────────── */
+/* module_json / lex_semantic / queries / lsp / session live in
+ * src/api/ as separate translation units. */
 
 
-#include "wgsl/module_json.inc"
-#include "wgsl/lex_semantic.inc"
-#include "wgsl/queries_project.inc"
+/* format.c */
+char *wgsl_format_from_ast(const WGSLNode *root, const char *src, size_t src_len);
+
+char *wgsl_format_result(const WGSLResult *r) {
+    if (!r || !r->ast.root || !r->src_copy) return NULL;
+    return wgsl_format_from_ast(r->ast.root, r->src_copy, r->src_len);
+}

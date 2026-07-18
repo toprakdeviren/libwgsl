@@ -17,7 +17,7 @@
  *
  * No inline tables, no integers, no booleans, no datetimes, no
  * multi-line strings, no nested keys.  Add support when a real config
- * needs it; for now this keeps the parser at ~200 LOC.
+ * needs it; this keeps the parser at ~200 LOC.
  */
 #ifndef WGSL_INTERNAL_TOML_H
 #define WGSL_INTERNAL_TOML_H

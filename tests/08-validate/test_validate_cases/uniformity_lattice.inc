@@ -201,6 +201,16 @@
               "switch uniform selector preserves uniform case state");
         done(&p);
     }
+    {
+        char *src = build_nested_switch_source(32u);
+        CHECK(src != NULL, "§7.13 nested-switch: build source");
+        if (src) {
+            P p; run(&p, src);
+            CHECK(p.ok, "§7.13 nested-switch: 32-deep validates");
+            done(&p);
+            free(src);
+        }
+    }
     /* §15.2.8 — short-circuit RHS is evaluated in control flow derived
      * from the left operand. */
     {

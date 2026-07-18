@@ -67,7 +67,7 @@ static void expect_ok(const char *src, const char *label) {
 }
 
 int main(void) {
-    /* ── §2 lead — module grammar: directives + decls + global    *
+    /* §2 lead - module grammar: directives + decls + global.
      *               asserts + empty `;` separators                */
     {
         const char *src =
@@ -89,7 +89,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §2 lead — directives must precede declarations ────────── */
+    /* §2 lead - directives must precede declarations. */
     {
         const char *src =
             "const X : i32 = 1;\n"
@@ -102,7 +102,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §2 lead — global_assert ───────────────────────────────── */
+    /* §2 lead - global_assert. */
     {
         WGSLResult *r = wgsl_check("const_assert 2 > 1;\n");
         dump_on_fail(r, "global_assert true");
@@ -129,7 +129,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §2.2 — shader-generation error: module is not "incorporated *
+    /* §2.2 - shader-generation error: module is not "incorporated.
      *           into a pipeline".  Pin the public-API contract:   *
      *           ok=0, ≥1 diagnostic, module_json empty.           */
     {
@@ -148,7 +148,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §2.3 — global diagnostic filter accepts the §2.3.2       *
+    /* §2.3 - global diagnostic filter accepts the §2.3.2.
      *           filterable rules                                  */
     {
         WGSLResult *r = wgsl_check(
@@ -181,7 +181,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §2.4 Limits — implementations MUST accept shaders that   *
+    /* §2.4 Limits - implementations MUST accept shaders that.
      *                   satisfy the minimum supported value.      *
      *                                                             *
      *   The lib doesn't impose tighter limits today, so each      *

@@ -5,8 +5,8 @@
  * `wgsl_arena_destroy` releases everything at once.  Allocations are
  * 8-byte aligned by default; use `_aligned` for stronger demands.
  *
- * Counters (`wgsl_arena_bytes`, `wgsl_arena_alloc_count`) are exposed
- * for the Phase 1 sub-deliverable (c) churn benchmark.
+ * Counters (`wgsl_arena_bytes`, `wgsl_arena_alloc_count`) are exposed for
+ * allocator churn benchmarks and embedders that want coarse telemetry.
  */
 #ifndef WGSL_INTERNAL_ARENA_H
 #define WGSL_INTERNAL_ARENA_H

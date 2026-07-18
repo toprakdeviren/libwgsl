@@ -1,6 +1,4 @@
 // WebGPU "hello triangle" — three vertices, one solid color.
-//
-// Used by tests/02-lexer-hello/ as Phase 2's done-when example.
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32) -> @builtin(position) vec4f {

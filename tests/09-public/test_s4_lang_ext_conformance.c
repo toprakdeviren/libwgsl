@@ -51,9 +51,9 @@ static void expect_ok(const char *src, const char *label) {
 }
 
 int main(void) {
-    /* ═══════════════════════════════════════════════════════════════
+    /*
      *  §4.1.2 — readonly_and_readwrite_storage_textures
-     * ═══════════════════════════════════════════════════════════════ */
+     */
 
     /* Core: write access always available */
     expect_ok(
@@ -84,9 +84,9 @@ int main(void) {
         "var t: texture_storage_2d<rgba8unorm, read_write>;\n",
         "§4.1.2 RO/RW: read_write access accepted without requires");
 
-    /* ═══════════════════════════════════════════════════════════════
+    /*
      *  §4.1.2 — texture_formats_tier1
-     * ═══════════════════════════════════════════════════════════════ */
+     */
 
     /* Core format — always works */
     expect_ok(
@@ -169,9 +169,9 @@ int main(void) {
         "var t: texture_storage_2d<rg11b10ufloat, write>;\n",
         "§4.1.2 T1: rg11b10ufloat accepted with requires");
 
-    /* ═══════════════════════════════════════════════════════════════
+    /*
      *  §4.1.2 — texture_and_sampler_let
-     * ═══════════════════════════════════════════════════════════════ */
+     */
 
     /* let with sampler type — available with implementation support. */
     expect_ok(
@@ -215,9 +215,9 @@ int main(void) {
         "}\n",
         "§4.1.2 TSL: let f32 always OK (no feature needed)");
 
-    /* ═══════════════════════════════════════════════════════════════
+    /*
      *  §4.1.2 — linear_indexing
-     * ═══════════════════════════════════════════════════════════════ */
+     */
 
     /* @builtin(global_invocation_index) — available with implementation
      * support; `requires` is documentary. */

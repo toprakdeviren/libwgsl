@@ -1,5 +1,5 @@
 /**
- * Phase 6 Iter C — const-evaluator across the real shader corpus.
+ * Const-evaluator coverage across the real shader corpus.
  *
  * Mirrors the resolver's corpus harness (`test_resolver_corpus.c`):
  *   1. `_shared.wgsl` is prepended to every kernel compilation.
@@ -14,8 +14,7 @@
  *   - Every `const_assert` (none currently in the corpus) — and any
  *     fn-scope const decl — is reachable and evaluates without error.
  *
- * Vec/mat constructor folding is out of scope per `DESIGN.md` Phase 6
- * v1 cap; the corpus does not exercise it (no const vec/mat decls).
+ * The corpus does not currently exercise const vec/mat declarations.
  */
 #include "internal/lexer.h"
 #include "internal/parser.h"
@@ -204,6 +203,17 @@ static void run_file(
 }
 
 int main(void) {
+    {
+        DIR *_d = opendir(SHADERS_DIR);
+        if (!_d) {
+            fprintf(stderr, "SKIP  %s: %s not present — VACUOUS (no corpus coverage; not a real pass)\n",
+                    __FILE__, SHADERS_DIR);
+            printf("PASS  corpus  VACUOUS (no %s)\n", SHADERS_DIR);
+            return 0;
+        }
+        closedir(_d);
+    }
+
     wgsl_utf8_init();
 
     size_t shared_len = 0;

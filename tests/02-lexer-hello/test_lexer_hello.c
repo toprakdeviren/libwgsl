@@ -1,6 +1,5 @@
 /**
- * Phase 2 done-when criterion:  "tokens emitted for the WebGPU
- * hello triangle".
+ * Token stream coverage for the WebGPU hello triangle example.
  *
  * This test reads `examples/hello-triangle.wgsl`, runs the lexer on
  * it, and verifies:
@@ -12,8 +11,8 @@
  *     starts on line 5, column 1)
  *   - the trailing EOF token is present
  *
- * Round B (template-list discovery) is now wired into `wgsl_tokenize`,
- * so the `<` / `>` around `array<vec2f, 3>` come out as
+ * Template-list discovery is wired into `wgsl_tokenize`, so the
+ * `<` / `>` around `array<vec2f, 3>` come out as
  * `TEMPLATE_START` / `TEMPLATE_END`.
  */
 #include "internal/lexer.h"
@@ -131,8 +130,8 @@ int main(void) {
     }
     CHECK(saw_let == 1,         "exactly one `let`");
     CHECK(saw_array >= 1,       "at least one `array` ident");
-    CHECK(saw_less == 0,        "no bare `<` after Round B (template discovery)");
-    CHECK(saw_greater == 0,     "no bare `>` after Round B (template discovery)");
+    CHECK(saw_less == 0,        "no bare `<` after template discovery");
+    CHECK(saw_greater == 0,     "no bare `>` after template discovery");
     CHECK(saw_tpl_start == 1,   "one TEMPLATE_START (`array<…>`)");
     CHECK(saw_tpl_end == 1,     "one TEMPLATE_END");
     CHECK(saw_arrow == 2,       "two `->` (one per fn header)");

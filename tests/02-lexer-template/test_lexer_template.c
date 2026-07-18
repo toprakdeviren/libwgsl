@@ -1,11 +1,11 @@
 /**
- * Phase 2 Round B — §3.9 template-list discovery.
+ * WGSL §3.9 template-list discovery tests.
  *
  * Validates that ambiguous `<` / `>` characters are retagged
  * `TEMPLATE_START` / `TEMPLATE_END` exactly when they delimit a
  * template list, and left as comparison / shift operators otherwise.
  *
- * Coverage map (numbered to match the round-up in the conversation):
+ * Coverage map:
  *
  *   1. `vec3<f32>`                 — basic template
  *   2. `array<vec2f, 3>`           — type + non-type arg

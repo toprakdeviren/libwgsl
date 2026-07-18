@@ -1,10 +1,5 @@
 /**
- * Phase 3 Round A — hello-triangle parses.
- *
- * The done-when criterion in `docs/PLAN.md` for Phase 3 says
- * "hello-triangle + 10 spec-doc examples parse + AST round-trip dump".
- * This test handles hello-triangle; the 10 spec examples land in
- * `tests/03-parser-spec/` once Round B / C land more grammar.
+ * Parser smoke coverage for the hello-triangle example.
  *
  * Asserts on `examples/hello-triangle.wgsl`:
  *   - lex + parse return ok (no error diagnostics)
@@ -58,8 +53,8 @@ static char *slurp(const char *path, size_t *out_len) {
 }
 
 static int name_eq(const WGSLNode *n, const WGSLSource *s, const char *want) {
-    uint32_t off = (uint32_t)(n->payload[0] & 0xFFFFFFFFu);
-    uint32_t len = (uint32_t)(n->payload[0] >> 32);
+    uint32_t off = wgsl_node_name_span(n).offset;
+    uint32_t len = wgsl_node_name_span(n).length;
     size_t wl = strlen(want);
     if (len != wl) return 0;
     return memcmp(s->bytes + off, want, wl) == 0;
@@ -93,19 +88,19 @@ int main(void) {
 
         CHECK(vs->kind == WGSL_NODE_DECL_FUNCTION, "vs is fn");
         CHECK(name_eq(vs, &source, "vs_main"),     "vs name = vs_main");
-        uint32_t vs_fa  = (uint32_t)(vs->payload[1] & 0xFFFFFFFFu);
-        uint32_t vs_p   = (uint32_t)(vs->payload[1] >> 32);
-        uint32_t vs_ra  = (uint32_t)(vs->payload[2] & 0xFFFFFFFFu);
-        uint32_t vs_hr  = (uint32_t)(vs->payload[2] >> 32);
+        uint32_t vs_fa  = wgsl_fn_attr_count(vs);
+        uint32_t vs_p   = wgsl_fn_param_count(vs);
+        uint32_t vs_ra  = wgsl_fn_ret_attr_count(vs);
+        uint32_t vs_hr  = wgsl_fn_has_return_type(vs);
         CHECK(vs_fa == 1 && vs_p == 1 && vs_ra == 1 && vs_hr == 1,
               "vs counts: 1 fn-attr / 1 param / 1 ret-attr / ret-type");
 
         CHECK(fs->kind == WGSL_NODE_DECL_FUNCTION, "fs is fn");
         CHECK(name_eq(fs, &source, "fs_main"),     "fs name = fs_main");
-        uint32_t fs_fa  = (uint32_t)(fs->payload[1] & 0xFFFFFFFFu);
-        uint32_t fs_p   = (uint32_t)(fs->payload[1] >> 32);
-        uint32_t fs_ra  = (uint32_t)(fs->payload[2] & 0xFFFFFFFFu);
-        uint32_t fs_hr  = (uint32_t)(fs->payload[2] >> 32);
+        uint32_t fs_fa  = wgsl_fn_attr_count(fs);
+        uint32_t fs_p   = wgsl_fn_param_count(fs);
+        uint32_t fs_ra  = wgsl_fn_ret_attr_count(fs);
+        uint32_t fs_hr  = wgsl_fn_has_return_type(fs);
         CHECK(fs_fa == 1 && fs_p == 0 && fs_ra == 1 && fs_hr == 1,
               "fs counts: 1 fn-attr / 0 params / 1 ret-attr / ret-type");
 

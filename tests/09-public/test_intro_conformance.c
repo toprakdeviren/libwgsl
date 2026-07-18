@@ -68,7 +68,7 @@ static void dump_on_fail(const WGSLResult *r, const char *label) {
 }
 
 int main(void) {
-    /* ── §1.1 — lead example: lighting fragment shader ─────────── */
+    /* §1.1 - lead example: lighting fragment shader. */
     {
         const char *src =
             "// A fragment shader which lights textured geometry with point lights.\n"
@@ -132,7 +132,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §1.1 note — module without entry point is valid ───────── *
+    /* §1.1 note - module without entry point is valid.
      *
      * "A WGSL program does not require an entry point; however, such
      *  a program cannot be executed by the API because an entry point
@@ -160,7 +160,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §1.1 module organisation roll-call ────────────────────── *
+    /* §1.1 module organisation roll-call.
      *
      * "A WGSL program is organized into: Directives, Functions,
      *  Statements, Literals, Constants, Variables, Expressions,
@@ -199,7 +199,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §1.1 statement category roll-call ─────────────────────── *
+    /* §1.1 statement category roll-call.
      *
      * Every statement form enumerated in §1.1 inside one entry point:
      *   - declarations (let, var, const_assert)
@@ -250,7 +250,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §1.1 — no implicit conversion between concrete types ──── *
+    /* §1.1 - no implicit conversion between concrete types.
      *
      * "Converting a value from one concrete numeric or boolean type
      *  to another requires an explicit conversion, value constructor,
@@ -275,7 +275,7 @@ int main(void) {
         }
     }
 
-    /* ── §1.1 — three forms of explicit concrete conversion ────── *
+    /* §1.1 - three forms of explicit concrete conversion.
      *
      * The intro names them as: "explicit conversion, value
      * constructor, or reinterpretation of bits".  Pin each form.
@@ -309,7 +309,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §1.1 — scalar→vector promotion ────────────────────────── *
+    /* §1.1 - scalar->vector promotion.
      *
      * "WGSL does provide some limited facility to promote scalar
      *  types to vector types."
@@ -339,7 +339,7 @@ int main(void) {
         wgsl_free(r);
     }
 
-    /* ── §1.3 mathematical notation — transpose / floor / ceil / trunc ── *
+    /* §1.3 mathematical notation - transpose / floor / ceil / trunc.
      *
      * §1.3 defines transpose(A) and the floor/ceiling/truncate
      * operations.  Pin that the matching builtins are present and

@@ -1,5 +1,5 @@
 /**
- * Phase 8 Iter A — validator: cycle detection family.
+ * Validator cycle-detection tests.
  *
  * Covers:
  *   - call-graph: self-recursion, mutual recursion → "recursion" diag
@@ -24,6 +24,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int fail = 0;
@@ -87,6 +88,29 @@ static int has_error_with(const WGSLDiagBag *b, const char *needle) {
     return 0;
 }
 
+static char *build_nested_switch_source(uint32_t depth) {
+    size_t cap = 64u + (size_t)depth * 48u;
+    char *src = (char *)malloc(cap);
+    if (!src) return NULL;
+    size_t pos = 0;
+    int n = snprintf(src + pos, cap - pos, "fn f(x: i32) {\n");
+    if (n < 0 || (size_t)n >= cap - pos) { free(src); return NULL; }
+    pos += (size_t)n;
+    for (uint32_t i = 0; i < depth; i++) {
+        n = snprintf(src + pos, cap - pos, "switch x { default: {\n");
+        if (n < 0 || (size_t)n >= cap - pos) { free(src); return NULL; }
+        pos += (size_t)n;
+    }
+    for (uint32_t i = 0; i < depth; i++) {
+        n = snprintf(src + pos, cap - pos, "} }\n");
+        if (n < 0 || (size_t)n >= cap - pos) { free(src); return NULL; }
+        pos += (size_t)n;
+    }
+    n = snprintf(src + pos, cap - pos, "}\n");
+    if (n < 0 || (size_t)n >= cap - pos) { free(src); return NULL; }
+    return src;
+}
+
 int main(void) {
     wgsl_utf8_init();
 
@@ -94,8 +118,10 @@ int main(void) {
 #include "test_validate_cases/cycles_attrs.inc"
 #include "test_validate_cases/attrs_uniformity_calls.inc"
 #include "test_validate_cases/uniformity_lattice.inc"
+#include "test_validate_cases/a5_uniformity_good_corpus.inc"
 #include "test_validate_cases/behavior_alias_layout.inc"
 #include "test_validate_cases/entry_address_tags.inc"
+#include "test_validate_cases/a4_caps.inc"
     fprintf(stderr, "%s  test_validate  (%d failure%s)\n",
             fail ? "FAIL" : "PASS", fail, fail == 1 ? "" : "s");
     return fail ? 1 : 0;

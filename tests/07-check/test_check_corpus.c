@@ -1,5 +1,5 @@
 /**
- * Phase 7 Iter C — type checker across the real shader corpus.
+ * Type-checker coverage across the real shader corpus.
  *
  * Engine-style harness (parallels test_resolver_corpus and
  * test_consteval_corpus): prepend `_shared.wgsl`, split each shader at
@@ -187,6 +187,17 @@ static void run_file(
 }
 
 int main(void) {
+    {
+        DIR *_d = opendir(SHADERS_DIR);
+        if (!_d) {
+            fprintf(stderr, "SKIP  %s: %s not present — VACUOUS (no corpus coverage; not a real pass)\n",
+                    __FILE__, SHADERS_DIR);
+            printf("PASS  corpus  VACUOUS (no %s)\n", SHADERS_DIR);
+            return 0;
+        }
+        closedir(_d);
+    }
+
     wgsl_utf8_init();
 
     size_t shared_len = 0;

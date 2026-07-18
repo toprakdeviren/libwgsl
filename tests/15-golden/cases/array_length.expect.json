@@ -1,0 +1,8 @@
+{
+  "entry": "main",
+  "len": 7,
+  "ok": true,
+  "buffers": [
+    { "name": "o", "values": ["7", "0", "0", "0", "0", "0", "0"] }
+  ]
+}
