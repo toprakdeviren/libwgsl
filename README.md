@@ -23,15 +23,12 @@ wgsl_free(r);
 
 ## What it is
 
-A small, embeddable WGSL frontend and analysis library. Given a source string,
-libwgsl checks it against the pinned WGSL profile and exposes structured
-diagnostics, semantic tokens, editor queries, and a JSON module summary with
-entry points, resources, layouts, overrides, and pipeline information.
+A small, embeddable WGSL frontend and analysis library. Given a source string, libwgsl checks it against the pinned WGSL profile and exposes structured diagnostics, semantic tokens, editor queries, and a JSON module summary with entry points, resources, layouts, overrides, and pipeline information.
 
 The same checked result feeds native applications, WebAssembly clients,
 language servers, reflection tooling, and the experimental execution analyzer.
-Unsupported or partial experimental behavior is reported explicitly instead of
-being presented as a successful full result.
+
+Unsupported or partial experimental behavior is reported explicitly instead of being presented as a successful full result.
 
 ## What it isn't
 
